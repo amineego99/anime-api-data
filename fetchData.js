@@ -11,18 +11,19 @@ if (!fs.existsSync(API_DIR)) {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function fetchWithRetry(url, retries = 3) {
-    for (let i = 0; i < retries; i++) {
-        try {
-            console.log(`[جاري الجلب] المحاولة ${i + 1}...`);
-            const response = await fetch(url);
-            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-            return await response.json();
-        } catch (error) {
-            console.error(`[فشل] المحاولة ${i + 1}: ${error.message}`);
-            if (i === retries - 1) throw error;
-            await delay(2000);
-        }
+  for (let i = 0; i < retries; i++) {
+    try {
+      console.log(`[URL] ${url}`);
+      console.log(`[جاري الجلب] المحاولة ${i + 1}...`);
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      return await response.json();
+    } catch (error) {
+      console.error(`[فشل] المحاولة ${i + 1}: ${error.message}`);
+      if (i === retries - 1) throw error;
+      await delay(2000);
     }
+  }
 }
 
 async function generateStaticAPIs() {
@@ -31,8 +32,9 @@ async function generateStaticAPIs() {
 
         // جلب قاعدة البيانات الشاملة من AOD
 // استبدل السطر القديم بهذا السطر الصحيح:
-    const aodData = await fetchWithRetry('https://raw.githubusercontent.com/manami-project/anime-offline-database/master/anime-offline-database.json');        
-        if (aodData && aodData.data) {
+    const aodData = await fetchWithRetry(
+  'https://github.com/manami-project/anime-offline-database/raw/master/anime-offline-database.json'
+);
             
             // 1. تنظيف البيانات الأساسية
             const allAnime = aodData.data.map(anime => ({
