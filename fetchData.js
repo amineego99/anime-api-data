@@ -30,8 +30,8 @@ async function generateStaticAPIs() {
         console.log("🚀 بدء جلب البيانات من Anime Offline Database (AOD) فقط...");
 
         // جلب قاعدة البيانات الشاملة من AOD
-        const aodData = await fetchWithRetry('https://raw.githubusercontent.com/manami-project/anime-offline-database/master/anime-offline-database-minified.json');
-        
+// استبدل السطر القديم بهذا السطر الصحيح:
+    const aodData = await fetchWithRetry('https://raw.githubusercontent.com/manami-project/anime-offline-database/master/anime-offline-database.json');        
         if (aodData && aodData.data) {
             
             // 1. تنظيف البيانات الأساسية
