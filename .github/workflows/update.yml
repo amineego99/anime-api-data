@@ -1,39 +1,34 @@
 name: Auto Update Anime Data
 
-# متى يعمل هذا السكربت؟
 on:
   schedule:
-    # يعمل تلقائياً كل 12 ساعة (يمكنك تغييرها)
     - cron: '0 */12 * * *'
-  
-  # هذا السطر يسمح لك بتشغيل السكربت يدوياً بضغطة زر متى شئت
   workflow_dispatch:
+
+# 🌟 التعديل الأول: إعطاء صلاحية الكتابة للسيرفر لكي يتمكن من حفظ الملفات 🌟
+permissions:
+  contents: write
 
 jobs:
   update-database:
-    runs-on: ubuntu-latest # استخدام سيرفر لينكس مجاني وسريع
+    runs-on: ubuntu-latest
 
     steps:
-      # 1. نسخ ملفات المستودع إلى السيرفر
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 2. إعداد بيئة Node.js لتشغيل السكربت
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22' # 🌟 التعديل الثاني: تحديث نسخة Node.js لحل التحذير 🌟
 
-      # 3. تشغيل سكربت جلب البيانات الذي كتبناه
       - name: Run Fetch Script
         run: node fetchData.js
 
-      # 4. حفظ ملفات JSON الجديدة ورفعها للمستودع
       - name: Commit and Push Changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add api/
-          # إذا لم تكن هناك بيانات جديدة، لن ينهار السكربت
           git commit -m "تحديث تلقائي لقاعدة بيانات الأنمي 🚀" || echo "لا توجد تغييرات جديدة للحفظ"
           git push
