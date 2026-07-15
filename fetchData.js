@@ -3,7 +3,6 @@ const path = require('path');
 
 const ANILIST_API_URL = 'https://graphql.anilist.co';
 const AOD_URL = 'https://github.com/manami-project/anime-offline-database/releases/latest/download/anime-offline-database-minified.json';
-// تم وضع الـ API الخاص بك هنا
 const IMGBB_API_KEY = '26b4fdf643aa51e8a1b09f02fa8a7a98';
 
 const DB_DIR = path.join(__dirname, 'api');
@@ -75,7 +74,6 @@ async function fetchAnilistAnimePage(page, retries = 3) {
     }
 }
 
-// تم تجريد هذه الدالة لتقوم فقط بجلب المعرفات (IDs) بدون الصور
 async function buildAodMapper() {
     console.log("🚀 جاري جلب AOD لاستخراج المعرفات فقط...");
     try {
@@ -104,12 +102,12 @@ async function buildAodMapper() {
     }
 }
 
-// دالة الرفع إلى ImgBB
+// 🌟 تحديث 1: دالة الرفع أصبحت تكتشف الحظر وترسل إشارة الإيقاف 🌟
 async function uploadToImgBB(imageUrl) {
     if (!imageUrl) return '';
     try {
         const formData = new FormData();
-        formData.append('image', imageUrl); // ImgBB يقبل الروابط مباشرة
+        formData.append('image', imageUrl); 
         
         const response = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
             method: 'POST',
@@ -120,7 +118,10 @@ async function uploadToImgBB(imageUrl) {
         if (data.success) {
             return data.data.url;
         } else {
-            console.error(`❌ فشل الرفع لـ ImgBB للصورة ${imageUrl}:`, data.error.message);
+            console.error(`❌ فشل الرفع لـ ImgBB للصورة ${imageUrl}:`, data.error?.message);
+            if (data.error && data.error.message && data.error.message.includes('Rate limit')) {
+                return 'RATE_LIMIT_REACHED';
+            }
             return imageUrl; 
         }
     } catch (error) {
@@ -129,37 +130,25 @@ async function uploadToImgBB(imageUrl) {
     }
 }
 
-// دالة تنسيق البيانات أصبحت غير متزامنة لانتظار رفع الصور
+// 🌟 تحديث 2: دالة التنسيق أصبحت تحمي روابط ImgBB وتمنع استبدالها بروابط AniList المحدثة 🌟
 async function formatAnimeData(anime, aodMap, existingAnime) {
     const aodInfo = aodMap[anime.id] || {};
     
-    // سحب الصورة عالية الدقة من AniList كهدف للرفع
-    let coverUrl = anime.coverImage?.extraLarge || anime.coverImage?.large || '';
-    let bannerUrl = anime.bannerImage || '';
+    let finalLargeImage = (existingAnime && existingAnime.coverImage?.large?.includes('ibb.co')) 
+        ? existingAnime.coverImage.large 
+        : (anime.coverImage?.extraLarge || anime.coverImage?.large || '');
 
-    // التحقق مما إذا تم رفع الغلاف مسبقاً
-    if (existingAnime && existingAnime.coverImage?.large?.includes('ibb.co')) {
-        coverUrl = existingAnime.coverImage.large;
-    } else if (coverUrl) {
-        console.log(`جاري استضافة الغلاف: ${anime.title.romaji}...`);
-        const uploadedCover = await uploadToImgBB(coverUrl);
-        coverUrl = uploadedCover || coverUrl;
-    }
+    let finalMediumImage = (existingAnime && existingAnime.coverImage?.medium?.includes('ibb.co')) 
+        ? existingAnime.coverImage.medium 
+        : (anime.coverImage?.medium || '');
 
-    // التحقق مما إذا تم رفع البانر مسبقاً
-    if (existingAnime && existingAnime.bannerImage?.includes('ibb.co')) {
-        bannerUrl = existingAnime.bannerImage;
-    } else if (bannerUrl) {
-        console.log(`جاري استضافة البانر: ${anime.title.romaji}...`);
-        const uploadedBanner = await uploadToImgBB(bannerUrl);
-        bannerUrl = uploadedBanner || bannerUrl;
-    } else {
-        bannerUrl = coverUrl; // استخدام الغلاف كبانر إذا لم يتوفر
-    }
+    let finalBannerImage = (existingAnime && existingAnime.bannerImage?.includes('ibb.co')) 
+        ? existingAnime.bannerImage 
+        : (anime.bannerImage || '');
 
     return {
         id: anime.id,
-        mal_id: anime.idMal || aodInfo.mal_id || null,
+        mal_id: anime.idMal || aodInfo.mal_id || (existingAnime ? existingAnime.mal_id : null),
         title: {
             romaji: anime.title.romaji || '',
             english: anime.title.english || anime.title.romaji || '',
@@ -167,10 +156,10 @@ async function formatAnimeData(anime, aodMap, existingAnime) {
         },
         description: anime.description || 'الوصف غير متوفر.',
         coverImage: {
-            large: coverUrl,
-            medium: coverUrl // توحيد الرابط لتوفير الطلبات الإضافية
+            large: finalLargeImage,
+            medium: finalMediumImage 
         },
-        bannerImage: bannerUrl,
+        bannerImage: finalBannerImage,
         season: anime.season || null,
         seasonYear: anime.seasonYear || null,
         format: anime.format || 'UNKNOWN',
@@ -202,7 +191,6 @@ async function main() {
 
     let stopFetching = false;
     let uploadsThisSession = 0;
-    // تحديد سقف للرفع في الجلسة الواحدة لتفادي حظر ImgBB (سيقوم برفعها تدريجياً مع كل تحديث)
     const MAX_UPLOADS_PER_SESSION = 100; 
 
     // ─── المرحلة 1: تحديث البيانات الجديدة من AniList ──────────────────────────
@@ -217,7 +205,6 @@ async function main() {
         for (const anime of animes) {
             if (anime.updatedAt > newHighestSyncTime) newHighestSyncTime = anime.updatedAt;
 
-            // نظام توفير الموارد الذكي
             if (!IS_FIRST_RUN && anime.updatedAt <= lastSyncTime) {
                 console.log(`🛑 تم الوصول لبيانات محدثة مسبقاً (ID: ${anime.id}). إيقاف الجلب!`);
                 stopFetching = true;
@@ -238,6 +225,7 @@ async function main() {
     }
 
     // ─── المرحلة 2: رفع الصور المتبقية ببطء وأمان (الاستئناف الذكي) ─────────────
+    // 🌟 تحديث 3: إنهاء الحلقة فور تلقي إشارة الحظر لتفادي تراكم الأخطاء 🌟
     console.log('🖼️ المرحلة 2: معالجة الصور التي لم ترفع بعد...');
     for (let i = 0; i < allAnime.length; i++) {
         if (uploadsThisSession >= MAX_UPLOADS_PER_SESSION) {
@@ -251,18 +239,30 @@ async function main() {
         if (anime.coverImage.large && !anime.coverImage.large.includes('ibb.co')) {
             console.log(`رفع غلاف: ${anime.title.romaji}`);
             const newCover = await uploadToImgBB(anime.coverImage.large);
+            
+            if (newCover === 'RATE_LIMIT_REACHED') {
+                console.log('⚠️ تم الوصول للحد الأقصى لـ ImgBB. سيتم الإيقاف والحفظ لضمان عدم ضياع البيانات.');
+                break; 
+            }
+
             if (newCover && newCover !== anime.coverImage.large) {
                 anime.coverImage.large = newCover;
                 anime.coverImage.medium = newCover;
                 isUpdated = true;
                 uploadsThisSession++;
             }
-            await delay(1500); // استراحة لتخفيف الضغط
+            await delay(1500); 
         }
 
         if (uploadsThisSession < MAX_UPLOADS_PER_SESSION && anime.bannerImage && !anime.bannerImage.includes('ibb.co') && anime.bannerImage !== anime.coverImage.large) {
             console.log(`رفع بانر: ${anime.title.romaji}`);
             const newBanner = await uploadToImgBB(anime.bannerImage);
+            
+            if (newBanner === 'RATE_LIMIT_REACHED') {
+                console.log('⚠️ تم الوصول للحد الأقصى لـ ImgBB. سيتم الإيقاف والحفظ لضمان عدم ضياع البيانات.');
+                break; 
+            }
+
             if (newBanner && newBanner !== anime.bannerImage) {
                 anime.bannerImage = newBanner;
                 isUpdated = true;
@@ -271,7 +271,6 @@ async function main() {
             await delay(1500);
         }
 
-        // حفظ التقدم لتفادي ضياع الصور المرفوعة
         if (isUpdated && uploadsThisSession % 10 === 0) {
             saveJSON(ALL_ANIME_FILE, allAnime);
         }
@@ -294,4 +293,5 @@ async function main() {
 
     console.log(`🚀 تم تحديث الـ API بنجاح! وتم رفع ${uploadsThisSession} صورة في هذه الجلسة.`);
 }
+
 main();
