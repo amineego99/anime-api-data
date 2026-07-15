@@ -11,13 +11,14 @@ if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
 const ALL_ANIME_FILE = path.join(DB_DIR, 'database.json');
 const ONGOING_FILE = path.join(DB_DIR, 'seasonal.json');
 const UPCOMING_FILE = path.join(DB_DIR, 'upcoming.json');
-const SCHEDULE_FILE = path.join(DB_DIR, 'schedule.json'); // للحلقات الجديدة
+const SCHEDULE_FILE = path.join(DB_DIR, 'schedule.json');
 const SYNC_FILE = path.join(DB_DIR, 'sync.json');
 
-const PER_PAGE = 50;
+// تم ضبط الدفعة إلى 25 عنصراً لتجنب الضغط الشديد على السيرفر
+const PER_PAGE = 25; 
 const IS_FIRST_RUN = !fs.existsSync(ALL_ANIME_FILE);
-// 400 صفحة تجلب كل أنميات العالم (حوالي 20 ألف) في التشغيل الأول، و 5 صفحات للتحديث اليومي
-const TOTAL_PAGES = IS_FIRST_RUN ? 400 : 5; 
+// مضاعفة عدد الصفحات لأننا قللنا عدد العناصر في كل دفعة
+const TOTAL_PAGES = IS_FIRST_RUN ? 800 : 10; 
 
 const query = `
 query ($page: Int, $perPage: Int) {
@@ -73,9 +74,9 @@ async function fetchAnilistAnimePage(page, retries = 3) {
     }
 }
 
-// 1. جلب AOD لبناء قاموس المعرفات
+// 1. جلب AOD لبناء قاموس المعرفات والصور 
 async function buildAodMapper() {
-    console.log("🚀 جاري جلب AOD لبناء خريطة المعرفات...");
+    console.log("🚀 جاري جلب AOD لبناء خريطة المعرفات والصور...");
     try {
         const res = await fetch(AOD_URL);
         const text = await res.text();
@@ -88,7 +89,14 @@ async function buildAodMapper() {
                 if (s.includes('anilist.co/anime/')) aniId = parseInt(s.split('/').pop());
                 if (s.includes('myanimelist.net/anime/')) malId = parseInt(s.split('/').pop());
             });
-            if (aniId) mapper[aniId] = { mal_id: malId };
+            if (aniId) {
+                // حفظ الصور والمعرفات من AOD
+                mapper[aniId] = { 
+                    mal_id: malId,
+                    picture: anime.picture, // الصورة الرئيسية من AOD
+                    thumbnail: anime.thumbnail // الصورة المصغرة من AOD
+                };
+            }
         });
         return mapper;
     } catch (e) {
@@ -97,21 +105,31 @@ async function buildAodMapper() {
     }
 }
 
-// 2. تنسيق البيانات لتتطابق 100% مع تطبيق React الخاص بك
+// 2. دمج بيانات AniList مع صور AOD
 function formatAnimeData(anime, aodMap) {
-    const extraIds = aodMap[anime.id] || {};
+    const aodInfo = aodMap[anime.id] || {};
+    
+    // 🌟 الأولوية المطلقة لصور AOD، والاحتياطي من AniList 🌟
+    const finalLargeImage = aodInfo.picture || aodInfo.thumbnail || anime.coverImage?.extraLarge || anime.coverImage?.large || '';
+    const finalMediumImage = aodInfo.thumbnail || aodInfo.picture || anime.coverImage?.medium || '';
     
     return {
         id: anime.id,
-        mal_id: anime.idMal || extraIds.mal_id || null,
+        mal_id: anime.idMal || aodInfo.mal_id || null,
         title: {
             romaji: anime.title.romaji || '',
             english: anime.title.english || anime.title.romaji || '',
             native: anime.title.native || ''
         },
         description: anime.description || 'الوصف غير متوفر.',
-        coverImage: anime.coverImage,
-        bannerImage: anime.bannerImage || anime.coverImage.extraLarge || anime.coverImage.large,
+        
+        // إدراج صور AOD بتنسيق يتوافق مع تطبيقك
+        coverImage: {
+            large: finalLargeImage,
+            medium: finalMediumImage
+        },
+        bannerImage: finalLargeImage, // استخدام نفس الصورة للبانر إذا لم تتوفر أخرى
+        
         season: anime.season || null,
         seasonYear: anime.seasonYear || null,
         format: anime.format || 'UNKNOWN',
@@ -153,7 +171,6 @@ async function main() {
         for (const anime of animes) {
             if (anime.updatedAt > newHighestSyncTime) newHighestSyncTime = anime.updatedAt;
 
-            // المزامنة الذكية: إيقاف الجلب إذا وصلنا لبيانات قديمة تم جلبها سابقاً
             if (!IS_FIRST_RUN && anime.updatedAt <= lastSyncTime) {
                 console.log(`🛑 تم الوصول لبيانات محدثة مسبقاً (ID: ${anime.id}). إيقاف الجلب لتوفير الموارد!`);
                 stopFetching = true;
@@ -171,18 +188,14 @@ async function main() {
         if (page < TOTAL_PAGES && !stopFetching) await delay(1500);
     }
 
-    // ترتيب الأنميات حسب الشهرة كوضع افتراضي قوي
     allAnime.sort((a, b) => b.popularity - a.popularity);
 
-    // حفظ الملفات
     saveJSON(ALL_ANIME_FILE, allAnime);
     saveJSON(SYNC_FILE, { last_updated_at: newHighestSyncTime });
     
-    // فلترة الملفات المصغرة لتطبيقك
     saveJSON(ONGOING_FILE, allAnime.filter(a => a.status === 'RELEASING'));
     saveJSON(UPCOMING_FILE, allAnime.filter(a => a.status === 'NOT_YET_RELEASED'));
     
-    // ملف خاص بجدول الحلقات القادمة مرتب زمنياً
     const schedule = allAnime
         .filter(a => a.nextAiringEpisode)
         .sort((a, b) => a.nextAiringEpisode.airingAt - b.nextAiringEpisode.airingAt);
