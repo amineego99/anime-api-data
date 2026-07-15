@@ -2,7 +2,8 @@ const fs = require('fs');
 const path = require('path');
 
 const ANILIST_API_URL = 'https://graphql.anilist.co';
-const AOD_URL = 'https://raw.githubusercontent.com/manami-project/anime-offline-database/refs/heads/master/anime-offline-database-minified.json';
+// 🌟 تم تحديث الرابط ليجلب البيانات من قسم Releases بناءً على التحديثات الجديدة لمشروع AOD 🌟
+const AOD_URL = 'https://github.com/manami-project/anime-offline-database/releases/latest/download/anime-offline-database-minified.json';
 
 const DB_DIR = path.join(__dirname, 'api');
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
@@ -17,7 +18,6 @@ const SYNC_FILE = path.join(DB_DIR, 'sync.json');
 // تم ضبط الدفعة إلى 25 عنصراً لتجنب الضغط الشديد على السيرفر
 const PER_PAGE = 25; 
 const IS_FIRST_RUN = !fs.existsSync(ALL_ANIME_FILE);
-// مضاعفة عدد الصفحات لأننا قللنا عدد العناصر في كل دفعة
 const TOTAL_PAGES = IS_FIRST_RUN ? 800 : 10; 
 
 const query = `
@@ -76,9 +76,12 @@ async function fetchAnilistAnimePage(page, retries = 3) {
 
 // 1. جلب AOD لبناء قاموس المعرفات والصور 
 async function buildAodMapper() {
-    console.log("🚀 جاري جلب AOD لبناء خريطة المعرفات والصور...");
+    console.log("🚀 جاري جلب AOD من الرابط الجديد لبناء خريطة المعرفات والصور...");
     try {
-        const res = await fetch(AOD_URL);
+        // إضافة توجيهات للمتصفح/السكربت لتتبع إعادة التوجيه التلقائية (redirects) التي يقوم بها GitHub Releases
+        const res = await fetch(AOD_URL, { redirect: 'follow' });
+        if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
+        
         const text = await res.text();
         const aodData = JSON.parse(text.trim());
         const mapper = {};
@@ -90,17 +93,17 @@ async function buildAodMapper() {
                 if (s.includes('myanimelist.net/anime/')) malId = parseInt(s.split('/').pop());
             });
             if (aniId) {
-                // حفظ الصور والمعرفات من AOD
                 mapper[aniId] = { 
                     mal_id: malId,
-                    picture: anime.picture, // الصورة الرئيسية من AOD
-                    thumbnail: anime.thumbnail // الصورة المصغرة من AOD
+                    picture: anime.picture, 
+                    thumbnail: anime.thumbnail 
                 };
             }
         });
+        console.log(`✅ نجاح! تم بناء خريطة AOD وتحتوي على صور لـ ${Object.keys(mapper).length} أنمي.`);
         return mapper;
     } catch (e) {
-        console.warn("⚠️ فشل جلب AOD، سنستمر بدونه.");
+        console.error("⚠️ فشل جلب AOD، السبب:", e.message);
         return {};
     }
 }
@@ -122,14 +125,11 @@ function formatAnimeData(anime, aodMap) {
             native: anime.title.native || ''
         },
         description: anime.description || 'الوصف غير متوفر.',
-        
-        // إدراج صور AOD بتنسيق يتوافق مع تطبيقك
         coverImage: {
             large: finalLargeImage,
             medium: finalMediumImage
         },
-        bannerImage: finalLargeImage, // استخدام نفس الصورة للبانر إذا لم تتوفر أخرى
-        
+        bannerImage: finalLargeImage,
         season: anime.season || null,
         seasonYear: anime.seasonYear || null,
         format: anime.format || 'UNKNOWN',
