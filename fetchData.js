@@ -2,8 +2,9 @@ const fs = require('fs');
 const path = require('path');
 
 const ANILIST_API_URL = 'https://graphql.anilist.co';
-// 🌟 تم تحديث الرابط ليجلب البيانات من قسم Releases بناءً على التحديثات الجديدة لمشروع AOD 🌟
 const AOD_URL = 'https://github.com/manami-project/anime-offline-database/releases/latest/download/anime-offline-database-minified.json';
+// تم وضع الـ API الخاص بك هنا
+const IMGBB_API_KEY = '26b4fdf643aa51e8a1b09f02fa8a7a98';
 
 const DB_DIR = path.join(__dirname, 'api');
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
@@ -15,7 +16,7 @@ const UPCOMING_FILE = path.join(DB_DIR, 'upcoming.json');
 const SCHEDULE_FILE = path.join(DB_DIR, 'schedule.json');
 const SYNC_FILE = path.join(DB_DIR, 'sync.json');
 
-// تم ضبط الدفعة إلى 25 عنصراً لتجنب الضغط الشديد على السيرفر
+// المحافظة على الدفعة 25 عنصراً فقط لتخفيف الضغط على السيرفر ولإعطاء وقت للرفع
 const PER_PAGE = 25; 
 const IS_FIRST_RUN = !fs.existsSync(ALL_ANIME_FILE);
 const TOTAL_PAGES = IS_FIRST_RUN ? 800 : 10; 
@@ -74,11 +75,10 @@ async function fetchAnilistAnimePage(page, retries = 3) {
     }
 }
 
-// 1. جلب AOD لبناء قاموس المعرفات والصور 
+// تم تجريد هذه الدالة لتقوم فقط بجلب المعرفات (IDs) بدون الصور
 async function buildAodMapper() {
-    console.log("🚀 جاري جلب AOD من الرابط الجديد لبناء خريطة المعرفات والصور...");
+    console.log("🚀 جاري جلب AOD لاستخراج المعرفات فقط...");
     try {
-        // إضافة توجيهات للمتصفح/السكربت لتتبع إعادة التوجيه التلقائية (redirects) التي يقوم بها GitHub Releases
         const res = await fetch(AOD_URL, { redirect: 'follow' });
         if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
         
@@ -93,29 +93,70 @@ async function buildAodMapper() {
                 if (s.includes('myanimelist.net/anime/')) malId = parseInt(s.split('/').pop());
             });
             if (aniId) {
-                mapper[aniId] = { 
-                    mal_id: malId,
-                    picture: anime.picture, 
-                    thumbnail: anime.thumbnail 
-                };
+                mapper[aniId] = { mal_id: malId }; 
             }
         });
-        console.log(`✅ نجاح! تم بناء خريطة AOD وتحتوي على صور لـ ${Object.keys(mapper).length} أنمي.`);
+        console.log(`✅ تم بناء خريطة AOD بنجاح.`);
         return mapper;
     } catch (e) {
-        console.error("⚠️ فشل جلب AOD، السبب:", e.message);
+        console.error("⚠️ فشل جلب AOD:", e.message);
         return {};
     }
 }
 
-// 2. دمج بيانات AniList مع صور AOD
-function formatAnimeData(anime, aodMap) {
+// دالة الرفع إلى ImgBB
+async function uploadToImgBB(imageUrl) {
+    if (!imageUrl) return '';
+    try {
+        const formData = new FormData();
+        formData.append('image', imageUrl); // ImgBB يقبل الروابط مباشرة
+        
+        const response = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            return data.data.url;
+        } else {
+            console.error(`❌ فشل الرفع لـ ImgBB للصورة ${imageUrl}:`, data.error.message);
+            return imageUrl; 
+        }
+    } catch (error) {
+        console.error(`❌ خطأ في الاتصال بـ ImgBB للصورة ${imageUrl}:`, error.message);
+        return imageUrl;
+    }
+}
+
+// دالة تنسيق البيانات أصبحت غير متزامنة لانتظار رفع الصور
+async function formatAnimeData(anime, aodMap, existingAnime) {
     const aodInfo = aodMap[anime.id] || {};
     
-    // 🌟 الأولوية المطلقة لصور AOD، والاحتياطي من AniList 🌟
-    const finalLargeImage = aodInfo.picture || aodInfo.thumbnail || anime.coverImage?.extraLarge || anime.coverImage?.large || '';
-    const finalMediumImage = aodInfo.thumbnail || aodInfo.picture || anime.coverImage?.medium || '';
-    
+    // سحب الصورة عالية الدقة من AniList كهدف للرفع
+    let coverUrl = anime.coverImage?.extraLarge || anime.coverImage?.large || '';
+    let bannerUrl = anime.bannerImage || '';
+
+    // التحقق مما إذا تم رفع الغلاف مسبقاً
+    if (existingAnime && existingAnime.coverImage?.large?.includes('ibb.co')) {
+        coverUrl = existingAnime.coverImage.large;
+    } else if (coverUrl) {
+        console.log(`جاري استضافة الغلاف: ${anime.title.romaji}...`);
+        const uploadedCover = await uploadToImgBB(coverUrl);
+        coverUrl = uploadedCover || coverUrl;
+    }
+
+    // التحقق مما إذا تم رفع البانر مسبقاً
+    if (existingAnime && existingAnime.bannerImage?.includes('ibb.co')) {
+        bannerUrl = existingAnime.bannerImage;
+    } else if (bannerUrl) {
+        console.log(`جاري استضافة البانر: ${anime.title.romaji}...`);
+        const uploadedBanner = await uploadToImgBB(bannerUrl);
+        bannerUrl = uploadedBanner || bannerUrl;
+    } else {
+        bannerUrl = coverUrl; // استخدام الغلاف كبانر إذا لم يتوفر
+    }
+
     return {
         id: anime.id,
         mal_id: anime.idMal || aodInfo.mal_id || null,
@@ -126,10 +167,10 @@ function formatAnimeData(anime, aodMap) {
         },
         description: anime.description || 'الوصف غير متوفر.',
         coverImage: {
-            large: finalLargeImage,
-            medium: finalMediumImage
+            large: coverUrl,
+            medium: coverUrl // توحيد الرابط لتوفير الطلبات الإضافية
         },
-        bannerImage: finalLargeImage,
+        bannerImage: bannerUrl,
         season: anime.season || null,
         seasonYear: anime.seasonYear || null,
         format: anime.format || 'UNKNOWN',
@@ -177,7 +218,10 @@ async function main() {
                 break;
             }
 
-            const formatted = formatAnimeData(anime, aodMap);
+            // إرسال البيانات الموجودة مسبقاً لتفادي إعادة الرفع
+            const existingAnime = animeMap.has(anime.id) ? allAnime[animeMap.get(anime.id)] : null;
+            const formatted = await formatAnimeData(anime, aodMap, existingAnime);
+            
             if (animeMap.has(formatted.id)) {
                 allAnime[animeMap.get(formatted.id)] = formatted;
             } else {
