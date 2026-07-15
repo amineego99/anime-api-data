@@ -1,96 +1,53 @@
 const fs = require('fs');
 const path = require('path');
 
+// إنشاء مجلد الحفظ إذا لم يكن موجوداً
 const API_DIR = path.join(__dirname, 'api');
-
 if (!fs.existsSync(API_DIR)) {
-  fs.mkdirSync(API_DIR, { recursive: true });
+    fs.mkdirSync(API_DIR, { recursive: true });
 }
 
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+// 🌟 الرابط الصحيح والمباشر لأحدث إصدار من الملف المصغر بناءً على التوثيق
+const AOD_LATEST_URL = 'https://github.com/manami-project/anime-offline-database/releases/latest/download/anime-offline-database-minified.json';
 
-async function fetchWithRetry(url, retries = 3) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      console.log(`[URL] ${url}`);
-      console.log(`[جاري الجلب] المحاولة ${i + 1}...`);
-
-      const response = await fetch(url);
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      return await response.json();
-    } catch (error) {
-      console.error(`[فشل] المحاولة ${i + 1}: ${error.message}`);
-
-      if (i === retries - 1) {
-        throw error;
-      }
-
-      await delay(2000);
-    }
-  }
+async function fetchAOD() {
+    console.log("🚀 جاري تحميل قاعدة البيانات من قسم الإصدارات (Releases)...");
+    const response = await fetch(AOD_LATEST_URL);
+    if (!response.ok) throw new Error(`فشل التحميل: HTTP status ${response.status}`);
+    return await response.json();
 }
 
 async function generateStaticAPIs() {
-  try {
-    console.log('🚀 بدء جلب البيانات من Anime Offline Database (AOD) فقط...');
+    try {
+        const aodData = await fetchAOD();
+        
+        if (aodData && aodData.data) {
+            console.log("✅ تم تحميل البيانات بنجاح، جاري المعالجة...");
+            
+            // تنقية البيانات الأساسية لتقليل حجمها
+            const allAnime = aodData.data.map(anime => ({
+                title: anime.title,
+                type: anime.type,
+                status: anime.status,
+                episodes: anime.episodes,
+                season: anime.animeSeason,
+                image: anime.picture,
+                tags: anime.tags,
+                sources: anime.sources 
+            }));
 
-    const aodData = await fetchWithRetry(
-      'https://github.com/manami-project/anime-offline-database/raw/master/anime-offline-database.json'
-    );
+            // تقسيم البيانات إلى ملفات JSON منفصلة
+            fs.writeFileSync(path.join(API_DIR, 'database.json'), JSON.stringify(allAnime));
+            fs.writeFileSync(path.join(API_DIR, 'seasonal.json'), JSON.stringify(allAnime.filter(a => a.status === 'ONGOING'), null, 2));
+            fs.writeFileSync(path.join(API_DIR, 'upcoming.json'), JSON.stringify(allAnime.filter(a => a.status === 'UPCOMING'), null, 2));
 
-    if (!aodData || !Array.isArray(aodData.data)) {
-      throw new Error('بنية ملف AOD غير متوقعة: الخاصية data غير موجودة أو ليست array');
+            console.log("🎉 تم حفظ جميع الملفات (database, seasonal, upcoming) بنجاح!");
+        }
+    } catch (error) {
+        console.error("❌ حدث خطأ أثناء المعالجة:", error);
+        process.exit(1); // إرسال رمز خطأ للسيرفر لإيقاف العملية
     }
-
-    const allAnime = aodData.data.map(anime => ({
-      title: anime.title || null,
-      type: anime.type || null,
-      status: anime.status || null,
-      episodes: anime.episodes || null,
-      season: anime.animeSeason || null,
-      image: anime.picture || null,
-      tags: anime.tags || [],
-      sources: anime.sources || []
-    }));
-
-    const seasonalAnime = allAnime.filter(
-      anime => anime.status === 'ONGOING' && anime.type === 'TV'
-    );
-
-    const upcomingAnime = allAnime.filter(
-      anime => anime.status === 'UPCOMING' && anime.type === 'TV'
-    );
-
-    fs.writeFileSync(
-      path.join(API_DIR, 'database.json'),
-      JSON.stringify(allAnime, null, 2),
-      'utf8'
-    );
-
-    fs.writeFileSync(
-      path.join(API_DIR, 'seasonal.json'),
-      JSON.stringify(seasonalAnime, null, 2),
-      'utf8'
-    );
-
-    fs.writeFileSync(
-      path.join(API_DIR, 'upcoming.json'),
-      JSON.stringify(upcomingAnime, null, 2),
-      'utf8'
-    );
-
-    console.log(`✅ تم حفظ database.json (إجمالي الأنميات: ${allAnime.length})`);
-    console.log(`✅ تم حفظ seasonal.json (الأنميات المستمرة: ${seasonalAnime.length})`);
-    console.log(`✅ تم حفظ upcoming.json (الأنميات القادمة: ${upcomingAnime.length})`);
-    console.log('🎉 تمت العملية بنجاح!');
-  } catch (error) {
-    console.error('❌ حدث خطأ أثناء المعالجة:', error);
-    process.exit(1);
-  }
 }
 
+// تشغيل السكربت
 generateStaticAPIs();
