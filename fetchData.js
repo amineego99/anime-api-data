@@ -189,7 +189,7 @@ async function formatAnimeData(anime, aodMap, existingAnime) {
 }
 
 async function main() {
-    if (IS_FIRST_RUN) console.log('🌟 التشغيل الأول! سيتم جلب قاعدة البيانات بالكامل...');
+    console.log('🌟 جاري تشغيل السكربت...');
 
     const aodMap = await buildAodMapper();
     
@@ -201,7 +201,12 @@ async function main() {
     let newHighestSyncTime = lastSyncTime;
 
     let stopFetching = false;
+    let uploadsThisSession = 0;
+    // تحديد سقف للرفع في الجلسة الواحدة لتفادي حظر ImgBB (سيقوم برفعها تدريجياً مع كل تحديث)
+    const MAX_UPLOADS_PER_SESSION = 100; 
 
+    // ─── المرحلة 1: تحديث البيانات الجديدة من AniList ──────────────────────────
+    console.log('🔄 المرحلة 1: جلب الأنميات والتحديثات الجديدة...');
     for (let page = 1; page <= TOTAL_PAGES; page++) {
         if (stopFetching) break;
         console.log(`جلب الصفحة ${page} من AniList...`);
@@ -212,13 +217,13 @@ async function main() {
         for (const anime of animes) {
             if (anime.updatedAt > newHighestSyncTime) newHighestSyncTime = anime.updatedAt;
 
+            // نظام توفير الموارد الذكي
             if (!IS_FIRST_RUN && anime.updatedAt <= lastSyncTime) {
-                console.log(`🛑 تم الوصول لبيانات محدثة مسبقاً (ID: ${anime.id}). إيقاف الجلب لتوفير الموارد!`);
+                console.log(`🛑 تم الوصول لبيانات محدثة مسبقاً (ID: ${anime.id}). إيقاف الجلب!`);
                 stopFetching = true;
                 break;
             }
 
-            // إرسال البيانات الموجودة مسبقاً لتفادي إعادة الرفع
             const existingAnime = animeMap.has(anime.id) ? allAnime[animeMap.get(anime.id)] : null;
             const formatted = await formatAnimeData(anime, aodMap, existingAnime);
             
@@ -232,6 +237,48 @@ async function main() {
         if (page < TOTAL_PAGES && !stopFetching) await delay(1500);
     }
 
+    // ─── المرحلة 2: رفع الصور المتبقية ببطء وأمان (الاستئناف الذكي) ─────────────
+    console.log('🖼️ المرحلة 2: معالجة الصور التي لم ترفع بعد...');
+    for (let i = 0; i < allAnime.length; i++) {
+        if (uploadsThisSession >= MAX_UPLOADS_PER_SESSION) {
+            console.log(`⚠️ تم الوصول للحد الآمن للرفع (${MAX_UPLOADS_PER_SESSION}). سيتم إكمال الباقي في التحديث القادم.`);
+            break; 
+        }
+
+        let anime = allAnime[i];
+        let isUpdated = false;
+
+        if (anime.coverImage.large && !anime.coverImage.large.includes('ibb.co')) {
+            console.log(`رفع غلاف: ${anime.title.romaji}`);
+            const newCover = await uploadToImgBB(anime.coverImage.large);
+            if (newCover && newCover !== anime.coverImage.large) {
+                anime.coverImage.large = newCover;
+                anime.coverImage.medium = newCover;
+                isUpdated = true;
+                uploadsThisSession++;
+            }
+            await delay(1500); // استراحة لتخفيف الضغط
+        }
+
+        if (uploadsThisSession < MAX_UPLOADS_PER_SESSION && anime.bannerImage && !anime.bannerImage.includes('ibb.co') && anime.bannerImage !== anime.coverImage.large) {
+            console.log(`رفع بانر: ${anime.title.romaji}`);
+            const newBanner = await uploadToImgBB(anime.bannerImage);
+            if (newBanner && newBanner !== anime.bannerImage) {
+                anime.bannerImage = newBanner;
+                isUpdated = true;
+                uploadsThisSession++;
+            }
+            await delay(1500);
+        }
+
+        // حفظ التقدم لتفادي ضياع الصور المرفوعة
+        if (isUpdated && uploadsThisSession % 10 === 0) {
+            saveJSON(ALL_ANIME_FILE, allAnime);
+        }
+    }
+
+    // ─── المرحلة 3: الترتيب والحفظ النهائي ────────────────────────────────────
+    console.log('💾 المرحلة 3: ترتيب وحفظ البيانات...');
     allAnime.sort((a, b) => b.popularity - a.popularity);
 
     saveJSON(ALL_ANIME_FILE, allAnime);
@@ -245,7 +292,6 @@ async function main() {
         .sort((a, b) => a.nextAiringEpisode.airingAt - b.nextAiringEpisode.airingAt);
     saveJSON(SCHEDULE_FILE, schedule);
 
-    console.log('🚀 تم تحديث الـ API بنجاح!');
+    console.log(`🚀 تم تحديث الـ API بنجاح! وتم رفع ${uploadsThisSession} صورة في هذه الجلسة.`);
 }
-
 main();
