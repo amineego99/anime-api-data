@@ -26,15 +26,17 @@ async function generateStaticAPIs() {
             
             // تنقية البيانات الأساسية لتقليل حجمها
             const allAnime = aodData.data.map(anime => ({
-                title: anime.title,
-                type: anime.type,
-                status: anime.status,
-                episodes: anime.episodes,
-                season: anime.animeSeason,
-                image: anime.picture,
-                tags: anime.tags,
-                sources: anime.sources 
-            }));
+                        title: anime.title,
+                        type: anime.type,
+                        status: anime.status,
+                        episodes: anime.episodes,
+                        season: anime.animeSeason,
+                        image: anime.picture,
+                        tags: anime.tags,
+                        sources: anime.sources,
+                        // 🌟 السطر الجديد لجلب تقييم الأنمي الحقيقي
+                        score: anime.score?.arithmeticMean || 0 
+                    }));
 
             // تقسيم البيانات إلى ملفات JSON منفصلة
             fs.writeFileSync(path.join(API_DIR, 'database.json'), JSON.stringify(allAnime));
