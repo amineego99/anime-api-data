@@ -9,10 +9,8 @@ if (!fs.existsSync(API_DIR)) {
 const AOD_LATEST_URL = 'https://raw.githubusercontent.com/manami-project/anime-offline-database/refs/heads/master/anime-offline-database-minified.json';
 const ANILIST_URL = 'https://graphql.anilist.co';
 
-// دالة تأخير لتجنب حظر السيرفر
 const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
-// دالة جلب البيانات من AniList على دفعات آمنة (25 أنمي في كل دفعة)
 async function fetchAniListTop(sortType, totalItems = 1000) {
     let results = {};
     const perPage = 25; 
@@ -48,7 +46,6 @@ async function fetchAniListTop(sortType, totalItems = 1000) {
                     };
                 });
             }
-            // انتظار ثانية ونصف بين كل طلب لضمان عدم حظر GitHub Actions
             await delay(1500); 
         } catch (error) {
             console.error(`❌ خطأ في جلب الصفحة ${page} من AniList:`, error.message);
@@ -61,7 +58,12 @@ async function generateStaticAPIs() {
     try {
         console.log("🚀 جاري تحميل قاعدة بيانات AOD...");
         const aodRes = await fetch(AOD_LATEST_URL);
-        const aodData = await aodRes.json();
+        
+        // تعديل جوهري: قراءة الاستجابة كنص وتنظيفها قبل التحويل لـ JSON
+        const rawText = await aodRes.text();
+        if (!rawText || rawText.trim().length === 0) throw new Error("الملف المحمل من AOD فارغ");
+        
+        const aodData = JSON.parse(rawText.trim());
         
         console.log("🌟 جاري جلب أرقام الشهرة الحقيقية من AniList...");
         const popularAniList = await fetchAniListTop('POPULARITY_DESC', 1000); 
@@ -69,20 +71,16 @@ async function generateStaticAPIs() {
         console.log("⭐ جاري جلب التقييمات الحقيقية من AniList...");
         const topRatedAniList = await fetchAniListTop('SCORE_DESC', 1000); 
         
-        // دمج أرقام AniList في كائن واحد للبحث السريع
         const combinedAniList = { ...popularAniList, ...topRatedAniList };
 
         console.log("✅ جاري دمج البيانات وتنقيتها...");
         const allAnime = aodData.data.map(anime => {
-            // استخراج معرف AniList من روابط AOD
             const anilistSource = anime.sources?.find(s => s.includes('anilist.co/anime/'));
             const anilistId = anilistSource ? parseInt(anilistSource.split('/').pop()) : null;
             
-            // قيم افتراضية تعتمد على عدد المصادر للأنميات غير الموجودة في التوب 1000
             let popularity = (anime.sources?.length || 0) * 100; 
             let score = anime.score?.arithmeticMean ? Math.round(anime.score.arithmeticMean * 10) : 0;
 
-            // إذا كان الأنمي ضمن الأنميات الشهيرة، نأخذ أرقامه الدقيقة من AniList
             if (anilistId && combinedAniList[anilistId]) {
                 popularity = combinedAniList[anilistId].popularity;
                 score = combinedAniList[anilistId].score;
@@ -102,8 +100,13 @@ async function generateStaticAPIs() {
             };
         });
 
-        // حفظ القاعدة الشاملة
         fs.writeFileSync(path.join(API_DIR, 'database.json'), JSON.stringify(allAnime));
+        
+        // إنشاء ملفات موسمية وقادمة بنفس التنسيق المحدث
+        const seasonal = allAnime.filter(a => a.status === 'ONGOING');
+        const upcoming = allAnime.filter(a => a.status === 'UPCOMING');
+        fs.writeFileSync(path.join(API_DIR, 'seasonal.json'), JSON.stringify(seasonal));
+        fs.writeFileSync(path.join(API_DIR, 'upcoming.json'), JSON.stringify(upcoming));
 
         console.log("🎉 تم إنشاء قاعدة البيانات بنجاح مع الترتيب الحقيقي!");
     } catch (error) {
