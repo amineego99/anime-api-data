@@ -191,7 +191,6 @@ async function main() {
 
     let stopFetching = false;
     let uploadsThisSession = 0;
-    const MAX_UPLOADS_PER_SESSION = 100; 
 
     // ─── المرحلة 1: تحديث البيانات الجديدة من AniList ──────────────────────────
     console.log('🔄 المرحلة 1: جلب الأنميات والتحديثات الجديدة...');
@@ -224,27 +223,20 @@ async function main() {
         if (page < TOTAL_PAGES && !stopFetching) await delay(1500);
     }
 
-    // ─── المرحلة 2: التحقق المباشر من الملف والرفع ────────────────────────────
-    console.log('🖼️ المرحلة 2: معالجة الصور التي لم ترفع بعد...');
+    // ─── المرحلة 2: التحقق المباشر من الملف والرفع المفتوح ────────────────────────────
+    console.log('🖼️ المرحلة 2: معالجة الصور التي لم ترفع بعد (وضع الرفع المفتوح)...');
     for (let i = 0; i < allAnime.length; i++) {
-        if (uploadsThisSession >= MAX_UPLOADS_PER_SESSION) {
-            console.log(`⚠️ تم الوصول للحد الآمن للرفع (${MAX_UPLOADS_PER_SESSION}). سيتم إكمال الباقي في التحديث القادم.`);
-            break; 
-        }
-
         let anime = allAnime[i];
         let isUpdated = false;
 
-        // 🌟 جدار الحماية الجديد: قراءة الملف الفعلي الآن للتحقق المزدوج 🌟
+        // قراءة الملف الفعلي الآن للتحقق المزدوج
         let freshDB = loadJSON(ALL_ANIME_FILE);
         let animeInDB = freshDB.find(a => a.id === anime.id);
 
         // 1. فحص الغلاف
         let needsCoverUpload = anime.coverImage.large && !anime.coverImage.large.includes('ibb.co');
         
-        // إذا كان السكربت يظن أنه يجب الرفع، لكن الملف الفعلي يقول أن الصورة مرفوعة مسبقاً
         if (needsCoverUpload && animeInDB && animeInDB.coverImage?.large?.includes('ibb.co')) {
-            // استرجاع الرابط من الملف وتجاهل الرفع
             anime.coverImage.large = animeInDB.coverImage.large;
             anime.coverImage.medium = animeInDB.coverImage.medium || animeInDB.coverImage.large;
             needsCoverUpload = false; 
@@ -254,6 +246,7 @@ async function main() {
             console.log(`رفع غلاف: ${anime.title.romaji}`);
             const newCover = await uploadToImgBB(anime.coverImage.large);
             
+            // سيتوقف هنا فقط إذا نفد رصيد الـ API
             if (newCover === 'RATE_LIMIT_REACHED') {
                 console.log('⚠️ تم الوصول للحد الأقصى لـ ImgBB. سيتم الإيقاف والحفظ لضمان عدم ضياع البيانات.');
                 break; 
@@ -269,10 +262,9 @@ async function main() {
         }
 
         // 2. فحص البانر
-        let needsBannerUpload = uploadsThisSession < MAX_UPLOADS_PER_SESSION && anime.bannerImage && !anime.bannerImage.includes('ibb.co') && anime.bannerImage !== anime.coverImage.large;
+        let needsBannerUpload = anime.bannerImage && !anime.bannerImage.includes('ibb.co') && anime.bannerImage !== anime.coverImage.large;
 
         if (needsBannerUpload && animeInDB && animeInDB.bannerImage?.includes('ibb.co')) {
-            // استرجاع الرابط من الملف وتجاهل الرفع
             anime.bannerImage = animeInDB.bannerImage;
             needsBannerUpload = false;
         }
@@ -281,6 +273,7 @@ async function main() {
             console.log(`رفع بانر: ${anime.title.romaji}`);
             const newBanner = await uploadToImgBB(anime.bannerImage);
             
+            // سيتوقف هنا فقط إذا نفد رصيد الـ API
             if (newBanner === 'RATE_LIMIT_REACHED') {
                 console.log('⚠️ تم الوصول للحد الأقصى لـ ImgBB. سيتم الإيقاف والحفظ لضمان عدم ضياع البيانات.');
                 break; 
@@ -294,7 +287,7 @@ async function main() {
             await delay(1500);
         }
 
-        // حفظ التقدم بشكل مستمر
+        // حفظ التقدم بشكل مستمر (كل 10 صور للحماية من فقدان البيانات)
         if (isUpdated && uploadsThisSession % 10 === 0) {
             saveJSON(ALL_ANIME_FILE, allAnime);
         }
@@ -318,5 +311,4 @@ async function main() {
     console.log(`🚀 تم تحديث الـ API بنجاح! وتم رفع ${uploadsThisSession} صورة في هذه الجلسة.`);
 }
 
-main();
 main();
