@@ -192,8 +192,8 @@ async function main() {
     let animeMap = new Map(allAnime.map((a, i) => [a.id, i]));
 
     // 🌟 نظام التبديل الذكي: يقرر حالة الجلب بناءً على حجم قاعدة البيانات 🌟
-    const IS_INCOMPLETE = allAnime.length < 4500; // نعتبر القاعدة غير مكتملة إذا كانت أقل من 4500 أنمي
-    const CURRENT_TOTAL_PAGES = IS_INCOMPLETE ? 300 : 10; 
+    const IS_INCOMPLETE = allAnime.length < 10000; // نعتبر القاعدة غير مكتملة إذا كانت أقل من 4500 أنمي
+    const CURRENT_TOTAL_PAGES = IS_INCOMPLETE ? 600 : 10; 
     
     if (IS_INCOMPLETE) {
         console.log(`⚠️ قاعدة البيانات غير مكتملة (${allAnime.length} أنمي فقط). سيتم تفعيل الوضع الشامل...`);
