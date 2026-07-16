@@ -76,7 +76,7 @@ async function fetchAnilistAnimePage(page, retries = 3) {
     }
 }
 
-// 🌟 استخراج الصور المؤقتة من AOD 🌟
+// 🌟 استخراج الصور المؤقتة ومعرفات MAL و Kitsu من AOD 🌟
 async function buildAodMapper() {
     console.log("🚀 جاري جلب AOD لاستخراج المعرفات والصور المؤقتة...");
     try {
@@ -88,13 +88,14 @@ async function buildAodMapper() {
         const mapper = {};
         
         aodData.data.forEach(anime => {
-            let aniId = null, malId = null;
+            let aniId = null, malId = null, kitsuId = null; // إضافة متغير kitsuId
             anime.sources.forEach(s => {
                 if (s.includes('anilist.co/anime/')) aniId = parseInt(s.split('/').pop());
                 if (s.includes('myanimelist.net/anime/')) malId = parseInt(s.split('/').pop());
+                if (s.includes('kitsu.app/anime/')) kitsuId = parseInt(s.split('/').pop()); // استخراج Kitsu ID
             });
             if (aniId) {
-                mapper[aniId] = { mal_id: malId, picture: anime.picture }; 
+                mapper[aniId] = { mal_id: malId, kitsu_id: kitsuId, picture: anime.picture }; // إضافته للخريطة
             }
         });
         console.log(`✅ تم بناء خريطة AOD بنجاح.`);
@@ -157,6 +158,7 @@ async function formatAnimeData(anime, aodMap, existingAnime) {
     return {
         id: anime.id,
         mal_id: anime.idMal || aodInfo.mal_id || (existingAnime ? existingAnime.mal_id : null),
+        kitsu_id: aodInfo.kitsu_id || (existingAnime ? existingAnime.kitsu_id : null), // 🌟 حفظ Kitsu ID هنا 🌟
         title: {
             romaji: anime.title.romaji || '',
             english: anime.title.english || anime.title.romaji || '',
@@ -196,7 +198,7 @@ async function main() {
     let animeMap = new Map(allAnime.map((a, i) => [a.id, i]));
 
     // 🌟 نظام التبديل الذكي: يقرر حالة الجلب بناءً على حجم قاعدة البيانات 🌟
-    const IS_INCOMPLETE = allAnime.length < 10000; // نعتبر القاعدة غير مكتملة إذا كانت أقل من 4500 أنمي
+    const IS_INCOMPLETE = allAnime.length < 10000; // نعتبر القاعدة غير مكتملة إذا كانت أقل من 10000 أنمي
     const CURRENT_TOTAL_PAGES = IS_INCOMPLETE ? 600 : 10; 
     
     if (IS_INCOMPLETE) {
@@ -220,6 +222,11 @@ async function main() {
         if (anime.bannerImage && !anime.bannerImage.includes('ibb.co')) {
             if (!anime._originalBanner) anime._originalBanner = anime.bannerImage;
         }
+        
+        // ترقيع لإضافة Kitsu ID للأنميات القديمة الموجودة سلفاً في الملف
+        if (!anime.kitsu_id && aodInfo && aodInfo.kitsu_id) {
+            anime.kitsu_id = aodInfo.kitsu_id;
+        }
     }
 
     let syncData = loadJSON(SYNC_FILE);
@@ -237,7 +244,7 @@ async function main() {
         
         const animes = await fetchAnilistAnimePage(page);
         
-        // حماية إضافية: إذا لم تعد هناك أنميات في أنيليست، سيتوقف تلقائياً حتى قبل الوصول للصفحة 300
+        // حماية إضافية: إذا لم تعد هناك أنميات في أنيليست، سيتوقف تلقائياً حتى قبل الوصول للصفحة 600
         if (animes.length === 0) {
             console.log(`انتهت الأنميات المتاحة في AniList عند الصفحة ${page}.`);
             break;
