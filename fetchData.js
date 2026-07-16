@@ -3,7 +3,7 @@ const path = require('path');
 
 const ANILIST_API_URL = 'https://graphql.anilist.co';
 const AOD_URL = 'https://github.com/manami-project/anime-offline-database/releases/latest/download/anime-offline-database-minified.json';
-const IMGBB_API_KEY = '26b4fdf643aa51e8a1b09f02fa8a7a98';
+const IMGBB_API_KEY = 'f2a1ba84b9a8184f782e482ad2d7c216';
 
 const DB_DIR = path.join(__dirname, 'api');
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
