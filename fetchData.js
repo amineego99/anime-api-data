@@ -60,12 +60,16 @@ async function fetchAnilistAnimePage(page, retries = 3) {
             body: JSON.stringify({ query, variables: { page, perPage: PER_PAGE } })
         });
         const json = await response.json();
+        
+        // التقاط رسائل الحظر الصريحة من AniList
+        if (response.status === 429) throw new Error('Rate Limit'); 
         if (json.errors) throw new Error(json.errors[0].message);
+        
         return json.data.Page.media;
     } catch (error) {
         if (retries > 0) {
-            console.warn(`⏳ ضغط على السيرفر في الصفحة ${page}. ننتظر 5 ثوانٍ...`);
-            await delay(5000);
+            console.warn(`⏳ حظر مؤقت أو ضغط من AniList في الصفحة ${page}. ننتظر 60 ثانية للتعافي...`);
+            await delay(60000); // 🌟 التعديل: الانتظار أصبح دقيقة كاملة (60,000 ملي ثانية) بدلاً من 5 ثوانٍ 🌟
             return fetchAnilistAnimePage(page, retries - 1);
         }
         return [];
