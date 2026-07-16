@@ -17,8 +17,6 @@ const SYNC_FILE = path.join(DB_DIR, 'sync.json');
 
 // المحافظة على الدفعة 25 عنصراً فقط لتخفيف الضغط على السيرفر ولإعطاء وقت للرفع
 const PER_PAGE = 25; 
-const IS_FIRST_RUN = !fs.existsSync(ALL_ANIME_FILE);
-const TOTAL_PAGES = IS_FIRST_RUN ? 800 : 10; 
 
 const query = `
 query ($page: Int, $perPage: Int) {
@@ -74,7 +72,7 @@ async function fetchAnilistAnimePage(page, retries = 3) {
     }
 }
 
-// 🌟 تعديل: استخراج الصور المؤقتة من AOD 🌟
+// 🌟 استخراج الصور المؤقتة من AOD 🌟
 async function buildAodMapper() {
     console.log("🚀 جاري جلب AOD لاستخراج المعرفات والصور المؤقتة...");
     try {
@@ -130,7 +128,7 @@ async function uploadToImgBB(imageUrl) {
     }
 }
 
-// 🌟 تعديل: حماية روابط ImgBB، إظهار صور AOD، وإخفاء روابط AniList الأصلية للرفع 🌟
+// 🌟 حماية روابط ImgBB، إظهار صور AOD، وإخفاء روابط AniList الأصلية للرفع 🌟
 async function formatAnimeData(anime, aodMap, existingAnime) {
     const aodInfo = aodMap[anime.id] || {};
     
@@ -192,6 +190,16 @@ async function main() {
     
     let allAnime = loadJSON(ALL_ANIME_FILE);
     let animeMap = new Map(allAnime.map((a, i) => [a.id, i]));
+
+    // 🌟 نظام التبديل الذكي: يقرر حالة الجلب بناءً على حجم قاعدة البيانات 🌟
+    const IS_INCOMPLETE = allAnime.length < 4500; // نعتبر القاعدة غير مكتملة إذا كانت أقل من 4500 أنمي
+    const CURRENT_TOTAL_PAGES = IS_INCOMPLETE ? 300 : 10; 
+    
+    if (IS_INCOMPLETE) {
+        console.log(`⚠️ قاعدة البيانات غير مكتملة (${allAnime.length} أنمي فقط). سيتم تفعيل الوضع الشامل...`);
+    } else {
+        console.log(`✅ قاعدة البيانات مكتملة (${allAnime.length} أنمي). سيتم تفعيل التحديث السريع (10 صفحات فقط)...`);
+    }
     
     // 🌟 الترقيع الآمن للملف الحالي لحمايته وتحديثه للنظام الجديد 🌟
     console.log('🛠️ جاري التحضير ودمج الصور المؤقتة...');
@@ -219,17 +227,23 @@ async function main() {
 
     // ─── المرحلة 1: تحديث البيانات الجديدة من AniList ──────────────────────────
     console.log('🔄 المرحلة 1: جلب الأنميات والتحديثات الجديدة...');
-    for (let page = 1; page <= TOTAL_PAGES; page++) {
+    for (let page = 1; page <= CURRENT_TOTAL_PAGES; page++) {
         if (stopFetching) break;
         console.log(`جلب الصفحة ${page} من AniList...`);
         
         const animes = await fetchAnilistAnimePage(page);
-        if (animes.length === 0) break;
+        
+        // حماية إضافية: إذا لم تعد هناك أنميات في أنيليست، سيتوقف تلقائياً حتى قبل الوصول للصفحة 300
+        if (animes.length === 0) {
+            console.log(`انتهت الأنميات المتاحة في AniList عند الصفحة ${page}.`);
+            break;
+        }
 
         for (const anime of animes) {
             if (anime.updatedAt > newHighestSyncTime) newHighestSyncTime = anime.updatedAt;
 
-            if (!IS_FIRST_RUN && anime.updatedAt <= lastSyncTime) {
+            // 🌟 السكربت لن يتوقف عن الجلب إلا إذا كانت قاعدة البيانات مكتملة 🌟
+            if (!IS_INCOMPLETE && anime.updatedAt <= lastSyncTime) {
                 console.log(`🛑 تم الوصول لبيانات محدثة مسبقاً (ID: ${anime.id}). إيقاف الجلب!`);
                 stopFetching = true;
                 break;
@@ -245,7 +259,7 @@ async function main() {
                 animeMap.set(formatted.id, allAnime.length - 1);
             }
         }
-        if (page < TOTAL_PAGES && !stopFetching) await delay(1500);
+        if (page < CURRENT_TOTAL_PAGES && !stopFetching) await delay(1500);
     }
 
     // ─── المرحلة 2: التحقق المباشر من الملف والرفع المفتوح ────────────────────────────
