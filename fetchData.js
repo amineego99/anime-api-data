@@ -78,7 +78,7 @@ async function fetchAnilistAnimePage(page, retries = 3) {
 
 // 🌟 استخراج الصور المؤقتة ومعرفات MAL و Kitsu من AOD 🌟
 async function buildAodMapper() {
-    console.log("🚀 جاري جلب AOD لاستخراج المعرفات والصور المؤقتة...");
+    console.log("🚀 جاري جلب AOD لاستخراج المعرفات والصور (MAL)...");
     try {
         const res = await fetch(AOD_URL, { redirect: 'follow' });
         if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
@@ -106,7 +106,7 @@ async function buildAodMapper() {
     }
 }
 
-// 🌟 دالة الرفع لـ ImgBB (متروكة كما طلبت كإجراء احتياطي) 🌟
+// 🌟 دالة الرفع إلى ImgBB 🌟
 async function uploadToImgBB(imageUrl) {
     if (!imageUrl) return '';
     try {
@@ -134,7 +134,7 @@ async function uploadToImgBB(imageUrl) {
     }
 }
 
-// 🌟 تطبيق روابط Kitsu أو الاحتفاظ بـ MAL للأنميات الجديدة 🌟
+// 🌟 تنسيق بيانات الأنميات الجديدة وتحديد الرابط الأولي (Kitsu أو MAL) 🌟
 async function formatAnimeData(anime, aodMap, existingAnime) {
     const aodInfo = aodMap[anime.id] || {};
     
@@ -144,7 +144,7 @@ async function formatAnimeData(anime, aodMap, existingAnime) {
     
     let defaultMalPicture = aodInfo.picture || anilistCover;
 
-    // تحديد الروابط: Kitsu إن وجد، وإلا MAL/AniList
+    // تحديد الروابط البديلة (Kitsu أو MAL) لتظهر للمستخدم ريثما يتم الرفع
     let finalLargeImage = (existingAnime && existingAnime.coverImage?.large?.includes('ibb.co')) 
         ? existingAnime.coverImage.large 
         : (kitsuId ? `https://media.kitsu.app/anime/poster_images/${kitsuId}/large.jpg` : defaultMalPicture);
@@ -157,6 +157,7 @@ async function formatAnimeData(anime, aodMap, existingAnime) {
         ? existingAnime.bannerImage 
         : (kitsuId ? `https://media.kitsu.app/anime/cover_images/${kitsuId}/large.jpg` : anilistBanner);
 
+    // الاحتفاظ بصور AniList الأصلية دائماً في قاعدة البيانات من أجل رفعها لاحقاً لـ ImgBB
     let origCover = (existingAnime && existingAnime._originalCover) ? existingAnime._originalCover : anilistCover;
     let origBanner = (existingAnime && existingAnime._originalBanner) ? existingAnime._originalBanner : anilistBanner;
 
@@ -211,7 +212,9 @@ async function main() {
         console.log(`✅ قاعدة البيانات مكتملة (${allAnime.length} أنمي). سيتم تفعيل التحديث السريع (10 صفحات فقط)...`);
     }
     
-    console.log('🛠️ جاري التحضير الأساسي للقاعدة...');
+    // ─── المرحلة التحضيرية: تطبيق روابط Kitsu / MAL للأنميات القديمة ───
+    console.log('🛠️ جاري التحضير الأساسي للقاعدة وتطبيق الروابط البديلة (Kitsu / MAL)...');
+    let prepUpdates = 0;
     for (let anime of allAnime) {
         let aodInfo = aodMap[anime.id];
         
@@ -219,87 +222,43 @@ async function main() {
             anime.kitsu_id = aodInfo.kitsu_id;
         }
 
+        // إذا كان الغلاف ليس ImgBB، نقوم بتطبيق الرابط البديل الآمن
         if (anime.coverImage && anime.coverImage.large && !anime.coverImage.large.includes('ibb.co')) {
-            if (!anime._originalCover) anime._originalCover = anime.coverImage.large;
-            if (aodInfo && aodInfo.picture && !anime.kitsu_id) {
+            if (!anime._originalCover) anime._originalCover = anime.coverImage.large; // حفظ رابط AniList إن لم يكن محفوظاً
+            
+            if (anime.kitsu_id) {
+                anime.coverImage.large = `https://media.kitsu.app/anime/poster_images/${anime.kitsu_id}/large.jpg`;
+                anime.coverImage.medium = `https://media.kitsu.app/anime/poster_images/${anime.kitsu_id}/medium.jpg`;
+                prepUpdates++;
+            } else if (aodInfo && aodInfo.picture) {
                 anime.coverImage.large = aodInfo.picture;
                 anime.coverImage.medium = aodInfo.picture;
+                prepUpdates++;
             }
         }
+        
         if (anime.bannerImage && !anime.bannerImage.includes('ibb.co')) {
             if (!anime._originalBanner) anime._originalBanner = anime.bannerImage;
+            
+            if (anime.kitsu_id) {
+                anime.bannerImage = `https://media.kitsu.app/anime/cover_images/${anime.kitsu_id}/large.jpg`;
+            }
         }
+    }
+    
+    if (prepUpdates > 0) {
+        console.log(`✅ تم تأمين ${prepUpdates} صورة بروابط بديلة بنجاح.`);
+        saveJSON(ALL_ANIME_FILE, allAnime);
     }
 
     let syncData = loadJSON(SYNC_FILE);
     let lastSyncTime = syncData.last_updated_at || 0;
     let newHighestSyncTime = lastSyncTime;
-
     let stopFetching = false;
-    let updatesThisSession = 0;
+    let uploadsThisSession = 0;
 
-    // ─── المرحلة 1: مراجعة الصور وتطبيق روابط Kitsu أولاً قبل الجلب الجديد ───────────
-    console.log('🖼️ المرحلة 1: مراجعة الصور الموجودة وتطبيق روابط Kitsu للروابط التي ليست imgbb أولاً...');
-    for (let i = 0; i < allAnime.length; i++) {
-        let anime = allAnime[i];
-        let isUpdated = false;
-
-        let needsCoverCheck = anime.coverImage && anime.coverImage.large && !anime.coverImage.large.includes('ibb.co');
-
-        if (needsCoverCheck) {
-            if (anime.kitsu_id) {
-                const targetKitsuLarge = `https://media.kitsu.app/anime/poster_images/${anime.kitsu_id}/large.jpg`;
-                const targetKitsuMedium = `https://media.kitsu.app/anime/poster_images/${anime.kitsu_id}/medium.jpg`;
-                
-                if (anime.coverImage.large !== targetKitsuLarge) {
-                    anime.coverImage.large = targetKitsuLarge;
-                    anime.coverImage.medium = targetKitsuMedium;
-                    isUpdated = true;
-                }
-            } else {
-                // إذا لم يوجد Kitsu، نتركه برابط MAL أو AniList الأصلي
-                const targetMal = anime._originalCover || anime.coverImage.large;
-                if (anime.coverImage.large !== targetMal) {
-                    anime.coverImage.large = targetMal;
-                    anime.coverImage.medium = targetMal;
-                    isUpdated = true;
-                }
-            }
-        }
-
-        let needsBannerCheck = anime.bannerImage && !anime.bannerImage.includes('ibb.co') && anime.bannerImage !== anime.coverImage.large;
-
-        if (needsBannerCheck) {
-            if (anime.kitsu_id) {
-                const targetKitsuBanner = `https://media.kitsu.app/anime/cover_images/${anime.kitsu_id}/large.jpg`;
-                if (anime.bannerImage !== targetKitsuBanner) {
-                    anime.bannerImage = targetKitsuBanner;
-                    isUpdated = true;
-                }
-            } else {
-                const targetMalBanner = anime._originalBanner || anime.bannerImage;
-                if (anime.bannerImage !== targetMalBanner) {
-                    anime.bannerImage = targetMalBanner;
-                    isUpdated = true;
-                }
-            }
-        }
-
-        if (isUpdated) {
-            updatesThisSession++;
-        }
-    }
-    
-    // حفظ التحديثات الخاصة بالصور قبل الانتقال للخطوة التالية
-    if (updatesThisSession > 0) {
-        console.log(`✅ تم تحديث ${updatesThisSession} رابط صورة في قاعدة البيانات الحالية. جاري الحفظ...`);
-        saveJSON(ALL_ANIME_FILE, allAnime);
-    } else {
-        console.log('✅ جميع الصور في القاعدة الحالية محدثة بالفعل.');
-    }
-
-    // ─── المرحلة 2: تحديث البيانات الجديدة من AniList ──────────────────────────
-    console.log('🔄 المرحلة 2: جلب الأنميات والتحديثات الجديدة...');
+    // ─── المرحلة 1: تحديث البيانات الجديدة من AniList ──────────────────────────
+    console.log('🔄 المرحلة 1: جلب الأنميات والتحديثات الجديدة...');
     for (let page = 1; page <= CURRENT_TOTAL_PAGES; page++) {
         if (stopFetching) break;
         console.log(`جلب الصفحة ${page} من AniList...`);
@@ -321,7 +280,6 @@ async function main() {
             }
 
             const existingAnime = animeMap.has(anime.id) ? allAnime[animeMap.get(anime.id)] : null;
-            // أثناء معالجة الأنمي الجديد، الدالة formatAnimeData ستقوم تلقائياً بتطبيق روابط Kitsu
             const formatted = await formatAnimeData(anime, aodMap, existingAnime);
             
             if (animeMap.has(formatted.id)) {
@@ -334,8 +292,80 @@ async function main() {
         if (page < CURRENT_TOTAL_PAGES && !stopFetching) await delay(1500);
     }
 
+    // ─── المرحلة 2: الرفع لـ ImgBB باستخدام صور AniList الأصلية ────────────────────────────
+    console.log('🖼️ المرحلة 2: معالجة الصور ورفع النسخ عالية الجودة (AniList) لـ ImgBB...');
+    for (let i = 0; i < allAnime.length; i++) {
+        let anime = allAnime[i];
+        let isUpdated = false;
+
+        // نجلب حالة الأنمي الحالية من الملف للتأكد من عدم رفع شيء مرفوع مسبقاً
+        let freshDB = loadJSON(ALL_ANIME_FILE);
+        let animeInDB = freshDB.find(a => a.id === anime.id);
+
+        let needsCoverUpload = anime.coverImage.large && !anime.coverImage.large.includes('ibb.co');
+        
+        if (needsCoverUpload && animeInDB && animeInDB.coverImage?.large?.includes('ibb.co')) {
+            anime.coverImage.large = animeInDB.coverImage.large;
+            anime.coverImage.medium = animeInDB.coverImage.medium || animeInDB.coverImage.large;
+            needsCoverUpload = false; 
+        }
+
+        if (needsCoverUpload) {
+            console.log(`رفع غلاف: ${anime.title.romaji}`);
+            
+            // 🌟 التعديل الحاسم: نأخذ الصورة الأصلية (AniList) لرفعها إلى ImgBB 🌟
+            const targetCover = anime._originalCover || anime.coverImage.large; 
+            const newCover = await uploadToImgBB(targetCover);
+            
+            if (newCover === 'RATE_LIMIT_REACHED') {
+                console.log('⚠️ تم الوصول للحد الأقصى لـ ImgBB. سيتم الإيقاف والحفظ لضمان عدم ضياع البيانات.');
+                break; 
+            }
+
+            if (newCover && newCover !== targetCover && newCover.includes('ibb.co')) {
+                anime.coverImage.large = newCover;
+                anime.coverImage.medium = newCover;
+                isUpdated = true;
+                uploadsThisSession++;
+            }
+            await delay(1500); 
+        }
+
+        let needsBannerUpload = anime.bannerImage && !anime.bannerImage.includes('ibb.co') && anime.bannerImage !== anime.coverImage.large;
+
+        if (needsBannerUpload && animeInDB && animeInDB.bannerImage?.includes('ibb.co')) {
+            anime.bannerImage = animeInDB.bannerImage;
+            needsBannerUpload = false;
+        }
+
+        if (needsBannerUpload) {
+            console.log(`رفع بانر: ${anime.title.romaji}`);
+            
+            // 🌟 نرفع البانر الأصلي (AniList) لـ ImgBB 🌟
+            const targetBanner = anime._originalBanner || anime.bannerImage;
+            const newBanner = await uploadToImgBB(targetBanner);
+            
+            if (newBanner === 'RATE_LIMIT_REACHED') {
+                console.log('⚠️ تم الوصول للحد الأقصى لـ ImgBB. سيتم الإيقاف والحفظ لضمان عدم ضياع البيانات.');
+                break; 
+            }
+
+            if (newBanner && newBanner !== targetBanner && newBanner.includes('ibb.co')) {
+                anime.bannerImage = newBanner;
+                isUpdated = true;
+                uploadsThisSession++;
+            }
+            await delay(1500);
+        }
+
+        // حفظ دوري كل 10 رفعات لحماية التقدم
+        if (isUpdated && uploadsThisSession % 10 === 0) {
+            saveJSON(ALL_ANIME_FILE, allAnime);
+        }
+    }
+
     // ─── المرحلة 3: الترتيب والحفظ النهائي ────────────────────────────────────
-    console.log('💾 المرحلة 3: ترتيب وحفظ البيانات المجمعة...');
+    console.log('💾 المرحلة 3: ترتيب وحفظ البيانات...');
     allAnime.sort((a, b) => b.popularity - a.popularity);
 
     saveJSON(ALL_ANIME_FILE, allAnime);
@@ -349,7 +379,7 @@ async function main() {
         .sort((a, b) => a.nextAiringEpisode.airingAt - b.nextAiringEpisode.airingAt);
     saveJSON(SCHEDULE_FILE, schedule);
 
-    console.log(`🚀 تم التحديث بنجاح! السكربت أنهى جميع عملياته.`);
+    console.log(`🚀 تم تحديث الـ API بنجاح! وتم رفع ${uploadsThisSession} صورة لـ ImgBB في هذه الجلسة.`);
 }
 
 main();
