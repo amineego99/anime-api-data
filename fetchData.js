@@ -286,13 +286,24 @@ async function main() {
         if (page < CURRENT_TOTAL_PAGES && !stopFetching) await delay(1500);
     }
 
-    // 🌟 🌟 🌟 الحفظ المبكر والآمن للحلقات والبيانات 🌟 🌟 🌟
+   // 🌟 🌟 🌟 الحفظ المبكر والآمن للحلقات والبيانات 🌟 🌟 🌟
     console.log('⚡ جاري تأمين البيانات وحفظ ملف الحلقات (Schedule) فوراً...');
     
     const schedule = allAnime
-        .filter(a => a.status === 'RELEASING') 
-        .sort((a, b) => b.updatedAt - a.updatedAt) 
-        .slice(0, 100); 
+        .filter(a => a.status === 'RELEASING' && a.nextAiringEpisode) 
+        .map(a => {
+            const releasedEpisode = a.nextAiringEpisode.episode > 1 
+                ? a.nextAiringEpisode.episode - 1 
+                : 1;
+            const lastEpisodeTime = a.nextAiringEpisode.airingAt - 604800;
+            return {
+                ...a,
+                episode: releasedEpisode,
+                lastAiredAt: lastEpisodeTime
+            };
+        })
+        .sort((a, b) => b.lastAiredAt - a.lastAiredAt) 
+        .slice(0, 50); 
         
     saveJSON(SCHEDULE_FILE, schedule);
     saveJSON(SYNC_FILE, { last_updated_at: newHighestSyncTime });
@@ -300,7 +311,6 @@ async function main() {
     
     console.log('✅ تم التحديث السريع! التطبيق سيشاهد الحلقات الجديدة الآن.');
     // 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟
-
 
     // ══════════════════════════════════════════════════════════════
     // 🟠 ثانياً: مراجعة الـ Database وتعديل الصور المعطوبة
