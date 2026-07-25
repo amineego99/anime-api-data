@@ -286,30 +286,53 @@ async function main() {
         if (page < CURRENT_TOTAL_PAGES && !stopFetching) await delay(1500);
     }
 
-   // 🌟 🌟 🌟 الحفظ المبكر والآمن للحلقات والبيانات 🌟 🌟 🌟
-    console.log('⚡ جاري تأمين البيانات وحفظ ملف الحلقات (Schedule) فوراً...');
+   // 🌟 🌟 🌟 بناء سجل الحلقات التراكمي (Timeline) 🌟 🌟 🌟
+    console.log('⚡ جاري بناء سجل الحلقات التراكمي...');
     
-    const schedule = allAnime
-        .filter(a => a.status === 'RELEASING' && a.nextAiringEpisode) 
-        .map(a => {
-            const releasedEpisode = a.nextAiringEpisode.episode > 1 
-                ? a.nextAiringEpisode.episode - 1 
-                : 1;
-            const lastEpisodeTime = a.nextAiringEpisode.airingAt - 604800;
-            return {
+    // 1. جلب السجل القديم من الملف (إن وجد)
+    let existingSchedule = loadJSON(SCHEDULE_FILE);
+    if (!Array.isArray(existingSchedule)) existingSchedule = [];
+
+    // 2. تجميع الحلقات الجديدة التي صدرت للتو
+    const newEpisodes = [];
+    allAnime.filter(a => a.status === 'RELEASING' && a.nextAiringEpisode).forEach(a => {
+        // استنتاج رقم الحلقة
+        const releasedEpisode = a.nextAiringEpisode.episode > 1 
+            ? a.nextAiringEpisode.episode - 1 
+            : 1;
+        
+        // استنتاج وقت الصدور
+        const lastEpisodeTime = a.nextAiringEpisode.airingAt - 604800;
+
+        // التحقق مما إذا كانت هذه الحلقة المحددة (لنفس الأنمي) موجودة بالفعل في السجل القديم
+        const isAlreadyInSchedule = existingSchedule.some(item => 
+            item.id === a.id && item.episode === releasedEpisode
+        );
+
+        // إذا لم تكن موجودة، نضيفها كبطاقة جديدة
+        if (!isAlreadyInSchedule) {
+            newEpisodes.push({
                 ...a,
                 episode: releasedEpisode,
                 lastAiredAt: lastEpisodeTime
-            };
-        })
-        .sort((a, b) => b.lastAiredAt - a.lastAiredAt) 
-        .slice(0, 50); 
+            });
+        }
+    });
+
+    // 3. دمج الحلقات الجديدة في بداية السجل القديم
+    let updatedSchedule = [...newEpisodes, ...existingSchedule];
+
+    // 4. ترتيب السجل بالكامل من الأحدث إلى الأقدم بناءً على وقت الصدور
+    updatedSchedule.sort((a, b) => b.lastAiredAt - a.lastAiredAt);
+
+    // 5. الاحتفاظ بآخر 200 حلقة فقط (لمنع تضخم الملف)
+    updatedSchedule = updatedSchedule.slice(0, 200);
         
-    saveJSON(SCHEDULE_FILE, schedule);
+    saveJSON(SCHEDULE_FILE, updatedSchedule);
     saveJSON(SYNC_FILE, { last_updated_at: newHighestSyncTime });
-    saveJSON(ALL_ANIME_FILE, allAnime); // 👈 حفظ القاعدة هنا يمنع فقدان البيانات إذا تعطل السكربت لاحقاً
+    saveJSON(ALL_ANIME_FILE, allAnime); 
     
-    console.log('✅ تم التحديث السريع! التطبيق سيشاهد الحلقات الجديدة الآن.');
+    console.log(`✅ تم التحديث! تمت إضافة ${newEpisodes.length} حلقات جديدة للسجل التراكمي.`);
     // 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟
 
     // ══════════════════════════════════════════════════════════════
