@@ -5,20 +5,18 @@ const ANILIST_API_URL = 'https://graphql.anilist.co';
 const AOD_URL = 'https://github.com/manami-project/anime-offline-database/releases/latest/download/anime-offline-database-minified.json';
 const IMGBB_API_KEY = '4d5e9c032af82adb668dc2882b100798';
 
-// 🌟 التعديل الأول: مفتاح للتحكم في فحص الصور (ضع true للتفعيل أو false للتعطيل)
+// 🌟 مفتاح للتحكم في فحص الصور (ضع true للتفعيل أو false للتعطيل)
 const ENABLE_IMAGE_VALIDATION = true; 
 
 const DB_DIR = path.join(__dirname, 'api');
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
 
-// مسارات الملفات
 const ALL_ANIME_FILE = path.join(DB_DIR, 'database.json');
 const ONGOING_FILE = path.join(DB_DIR, 'seasonal.json');
 const UPCOMING_FILE = path.join(DB_DIR, 'upcoming.json');
 const SCHEDULE_FILE = path.join(DB_DIR, 'schedule.json');
 const SYNC_FILE = path.join(DB_DIR, 'sync.json');
 
-// المحافظة على الدفعة 25 عنصراً فقط لتخفيف الضغط على السيرفر ولإعطاء وقت للرفع
 const PER_PAGE = 25; 
 
 const query = `
@@ -55,38 +53,45 @@ function saveJSON(filePath, data) {
 
 async function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
-// 🌟 الدالة الجديدة: فحص الرابط للتأكد من أن الصورة موجودة فعلاً وليست مكسورة 🌟
+// دالة الفحص العادية
 async function isImageValid(url) {
     if (!ENABLE_IMAGE_VALIDATION) return true; 
-
     if (!url) return false;
     try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 4000); 
-        const res = await fetch(url, { method: 'HEAD', signal: controller.signal });
+        // 🌟 التعديل: استخدام GET لتجاوز حظر Cloudflare 
+        const res = await fetch(url, { method: 'GET', signal: controller.signal });
         clearTimeout(timeoutId);
+        if (res.body && res.body.cancel) await res.body.cancel();
         return res.ok || res.status === 304; 
     } catch (e) {
         return false;
     }
 }
 
-// 🌟 دالة الفحص الصارمة الإجبارية (مُحسنة لتخطي الحمايات وإرجاع تفاصيل الخطأ) 🌟
+// 🌟 دالة الفحص الصارمة الإجبارية (مُحسنة بـ GET لتخطي الحمايات وإرجاع تفاصيل الخطأ) 🌟
 async function checkImageStrict(url) {
     if (!url) return { valid: false, status: 0 };
     try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000); 
+        const timeoutId = setTimeout(() => controller.abort(), 6000); 
         const res = await fetch(url, { 
-            method: 'HEAD', 
+            method: 'GET', // استخدام GET لتخطي الـ 404 الوهمي
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+                'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
             },
             signal: controller.signal 
         });
         clearTimeout(timeoutId);
-        return { valid: res.ok || res.status === 304, status: res.status };
+        
+        const isValid = res.ok || res.status === 304;
+        
+        // 🌟 قطع الاتصال فوراً لتوفير الإنترنت لأننا نحتاج فقط التأكد من الـ Status
+        if (res.body && res.body.cancel) await res.body.cancel();
+
+        return { valid: isValid, status: res.status };
     } catch (e) {
         return { valid: false, status: 'TIMEOUT_OR_ERROR' };
     }
@@ -131,7 +136,11 @@ async function buildAodMapper() {
             anime.sources.forEach(s => {
                 if (s.includes('anilist.co/anime/')) aniId = parseInt(s.split('/').pop());
                 if (s.includes('myanimelist.net/anime/')) malId = parseInt(s.split('/').pop());
-                if (s.includes('kitsu.app/anime/')) kitsuId = parseInt(s.split('/').pop()); 
+                // 🌟 الإصلاح الحرج: إضافة kitsu.io لاستخراج المعرفات بشكل صحيح
+                if (s.includes('kitsu.app/anime/') || s.includes('kitsu.io/anime/')) {
+                    let k = parseInt(s.split('/').pop());
+                    if (!isNaN(k)) kitsuId = k;
+                }
             });
             if (aniId) {
                 mapper[aniId] = { mal_id: malId, kitsu_id: kitsuId, picture: anime.picture }; 
@@ -173,7 +182,7 @@ async function uploadToImgBB(imageUrl) {
     }
 }
 
-// تنسيق بيانات الأنميات الجديدة وتحديد الرابط الأولي بعد الفحص
+// تنسيق بيانات الأنميات الجديدة
 async function formatAnimeData(anime, aodMap, existingAnime) {
     const aodInfo = aodMap[anime.id] || {};
     
@@ -187,7 +196,6 @@ async function formatAnimeData(anime, aodMap, existingAnime) {
     let finalMediumImage = defaultMalPicture;
     let finalBannerImage = anilistBanner;
 
-    // فحص الصورة إذا لم تكن مرفوعة مسبقاً
     if (existingAnime && existingAnime.coverImage?.large?.includes('ibb.co')) {
         finalLargeImage = existingAnime.coverImage.large;
         finalMediumImage = existingAnime.coverImage.medium;
@@ -263,14 +271,19 @@ async function main() {
     // ══════════════════════════════════════════════════════════════
     // 🟠 صفر: مراجعة صارمة لروابط الصور وحمايتها (مع Logs مفصلة)
     // ══════════════════════════════════════════════════════════════
-    console.log('🔍 صفر: فحص مبدئي صارم لروابط قاعدة البيانات للتأكد من سلامتها (الآن مع سجلات مفصلة)...');
+    console.log('🔍 صفر: فحص مبدئي صارم لروابط قاعدة البيانات للتأكد من سلامتها...');
     let initialUpdates = 0;
     let failedUpdates = 0;
 
     for (let i = 0; i < allAnime.length; i++) {
         let anime = allAnime[i];
         let isUpdated = false;
-        let kitsuId = anime.kitsu_id || (aodMap[anime.id] ? aodMap[anime.id].kitsu_id : null);
+        
+        // 🌟 تحديث معرّف Kitsu من AOD في حال كان ناقصاً
+        if (aodMap[anime.id] && aodMap[anime.id].kitsu_id) {
+            anime.kitsu_id = aodMap[anime.id].kitsu_id;
+        }
+        let kitsuId = anime.kitsu_id;
         let animeName = anime.title.romaji || anime.id;
 
         // --- 1. فحص صورة الغلاف (Cover) ---
@@ -287,7 +300,7 @@ async function main() {
                 let check = await checkImageStrict(coverUrl);
                 if (!check.valid) {
                     needsUpdate = true;
-                    logReason = `رابط Kitsu معطل (Status: ${check.status})`;
+                    logReason = `رابط Kitsu القديم معطل (Status: ${check.status})`;
                 }
             } else {
                 needsUpdate = true;
@@ -296,10 +309,10 @@ async function main() {
 
             if (needsUpdate) {
                 if (!kitsuId) {
-                    console.log(`⚠️ [تخطي الغلاف] ${animeName}: ${logReason} ولكن لا يوجد معرف Kitsu متاح.`);
+                    // صامت إذا لم يوجد ID
                 } else {
                     let targetKitsuCover = `https://media.kitsu.app/anime/poster_images/${kitsuId}/large.jpg`;
-                    console.log(`🔄 [جاري التحديث] ${animeName} | الغلاف: ${logReason} -> محاولة فحص رابط Kitsu البديل...`);
+                    console.log(`🔄 [جاري التحديث] ${animeName} | الغلاف: ${logReason} -> فحص رابط Kitsu...`);
                     
                     let targetCheck = await checkImageStrict(targetKitsuCover);
                     
@@ -310,10 +323,9 @@ async function main() {
                         console.log(`✅ [نجاح الغلاف] ${animeName}: تم التحديث إلى Kitsu بنجاح.`);
                     } else {
                         failedUpdates++;
-                        console.log(`❌ [فشل الغلاف] ${animeName}: الرابط البديل من Kitsu لا يعمل (Status: ${targetCheck.status}). الإبقاء على الرابط القديم لحمايته.`);
+                        console.log(`❌ [فشل الغلاف] ${animeName}: الرابط البديل لا يعمل (Status: ${targetCheck.status}). الإبقاء على القديم لحمايته.`);
                     }
-                    // 🌟 تأخير 150 ملي ثانية لتجنب الحظر (429 Rate Limit) من Kitsu 🌟
-                    await delay(150); 
+                    await delay(300); // 🌟 تأخير لتجنب الحظر
                 }
             }
         }
@@ -341,7 +353,7 @@ async function main() {
 
             if (needsUpdate && kitsuId) {
                 let targetKitsuBanner = `https://media.kitsu.app/anime/cover_images/${kitsuId}/large.jpg`;
-                console.log(`🔄 [جاري التحديث] ${animeName} | البانر: ${logReason} -> محاولة فحص بانر Kitsu البديل...`);
+                console.log(`🔄 [جاري التحديث] ${animeName} | البانر: ${logReason} -> فحص بانر Kitsu...`);
                 
                 let targetCheck = await checkImageStrict(targetKitsuBanner);
                 
@@ -351,9 +363,9 @@ async function main() {
                     console.log(`✅ [نجاح البانر] ${animeName}: تم التحديث إلى Kitsu بنجاح.`);
                 } else {
                     failedUpdates++;
-                    console.log(`❌ [فشل البانر] ${animeName}: البانر البديل لا يعمل (Status: ${targetCheck.status}). الإبقاء على البانر القديم.`);
+                    console.log(`❌ [فشل البانر] ${animeName}: البانر البديل لا يعمل (Status: ${targetCheck.status}). الإبقاء على القديم.`);
                 }
-                await delay(150);
+                await delay(300);
             }
         }
 
@@ -362,7 +374,7 @@ async function main() {
 
     console.log(`\n📊 [إحصائيات الفحص الأولي]`);
     console.log(`- الأنميات التي تم تحويلها بنجاح: ${initialUpdates}`);
-    console.log(`- الأنميات التي تم الإبقاء على روابطها القديمة (لأن Kitsu لا يمتلك صور لها أو محظور): ${failedUpdates}`);
+    console.log(`- الأنميات التي تم الإبقاء على روابطها القديمة (لأن Kitsu لا يمتلك صور لها): ${failedUpdates}`);
 
     if (initialUpdates > 0) {
         console.log(`جاري حفظ البيانات المبدئية...`);
@@ -551,7 +563,6 @@ async function main() {
     for (let i = 0; i < allAnime.length; i++) {
         let anime = allAnime[i];
         
-        // 🌟 التعديل الثاني: التحقق مما إذا كان الأنمي هينتاي، وإذا لم يكن كذلك نتخطاه
         const isHentai = anime.genres && anime.genres.some(g => g.toLowerCase() === 'hentai');
         if (!isHentai) continue;
 
