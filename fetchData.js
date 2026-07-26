@@ -10,9 +10,10 @@ console.log = (...args) => {
 
 const ANILIST_API_URL = 'https://graphql.anilist.co';
 const AOD_URL = 'https://github.com/manami-project/anime-offline-database/releases/latest/download/anime-offline-database-minified.json';
+
+// 🌟 تمت إعادة الرابط الأصلي الصحيح والموثوق
 const TMDB_MAPPING_URL = 'https://raw.githubusercontent.com/Fribb/anime-lists/master/anime-list-full.json';
 
-// ضع مفتاح TMDB API الخاص بك هنا
 const TMDB_API_KEY = '21e3a681c29b77f96c3456d5cbd6ef17'; 
 const IMGBB_API_KEY = 'b319ae56c851eecbb26149310233535b';
 
@@ -157,15 +158,16 @@ async function buildTmdbMapper() {
                 mapper[item.anilist_id] = { tmdb_id: item.themoviedb_id, tmdb_type: item.type === 'Movie' ? 'movie' : 'tv' };
             }
         });
+        console.log(`✅ تم بناء خريطة TMDB بنجاح (${Object.keys(mapper).length} أنمي).`);
         return mapper;
     } catch (e) {
+        console.error("❌ فشل جلب خريطة TMDB:", e.message);
         return {};
     }
 }
 
 async function formatAnimeData(anime, aodMap, tmdbMap, existingAnime) {
     const aodInfo = aodMap.byAni[anime.id] || aodMap.byMal[anime.idMal] || {};
-    const tmdbInfo = tmdbMap[anime.id] || null;
     
     let kitsuId = aodInfo.kitsu_id || (existingAnime ? existingAnime.kitsu_id : null);
     let anilistCover = anime.coverImage?.extraLarge || anime.coverImage?.large || '';
@@ -180,13 +182,12 @@ async function formatAnimeData(anime, aodMap, tmdbMap, existingAnime) {
     let isProtected = false;
     let isBannerProtected = false;
 
-    // 🌟 الاحتفاظ الفوري بالصور الموجودة في القاعدة
     if (existingAnime) {
         finalLargeImage = existingAnime.coverImage?.large || finalLargeImage;
         finalMediumImage = existingAnime.coverImage?.medium || finalMediumImage;
         finalBannerImage = existingAnime.bannerImage || finalBannerImage;
 
-        // 🛡️ حماية ImgBB وصور TMDB الجاهزة فقط لمنع إعادة جلبها مراراً
+        // 🛡️ حماية صور ImgBB وصور TMDB التي تم جلبها مسبقاً 
         if (finalLargeImage.includes('ibb.co') || finalLargeImage.includes('image.tmdb.org')) {
             isProtected = true;
         }
@@ -202,8 +203,6 @@ async function formatAnimeData(anime, aodMap, tmdbMap, existingAnime) {
         id: anime.id,
         mal_id: anime.idMal || aodInfo.mal_id || (existingAnime ? existingAnime.mal_id : null),
         kitsu_id: kitsuId, 
-        tmdb_id: tmdbInfo ? tmdbInfo.tmdb_id : (existingAnime ? existingAnime.tmdb_id : null),
-        tmdb_type: tmdbInfo ? tmdbInfo.tmdb_type : (existingAnime ? existingAnime.tmdb_type : null),
         title: {
             romaji: anime.title.romaji || '',
             english: anime.title.english || anime.title.romaji || '',
@@ -288,26 +287,30 @@ async function main() {
         if (page < CURRENT_TOTAL_PAGES && !stopFetching) await delay(1500);
     }
 
-   // ══════════════════════════════════════════════════════════════
-    // 🌟 ثانياً: المكنسة الهجومية (استبدال إجباري لصور MAL/AniList بـ TMDB أو Kitsu)
     // ══════════════════════════════════════════════════════════════
-    console.log('🔍 ثانياً: ترقية جميع الصور غير المحمية إلى جودة TMDB السينمائية (أو Kitsu كبديل)...');
-    let fixCount = 0;
+    // 🌟 ثانياً: المكنسة الشاملة (ترقية لـ TMDB وإصلاح صور Kitsu المكسورة)
+    // ══════════════════════════════════════════════════════════════
+    console.log('🔍 ثانياً: المكنسة الشاملة لترقية الصور وترميم الروابط المكسورة...');
+    let tmdbFixCount = 0;
+    let fallbackFixCount = 0;
     
     for (let i = 0; i < allAnime.length; i++) {
         let anime = allAnime[i];
         
-        // نتخطى فقط صور ImgBB وصور TMDB التي تم ترقيتها سابقاً
-        if (anime._isProtected) continue; 
+        if (anime._isProtected) {
+            delete anime._isProtected;
+            delete anime._isBannerProtected;
+            continue; 
+        }
 
         let fixedWithTmdb = false;
         
-        // 🌟 السر هنا: نجلب الـ ID من الخريطة مباشرة لأن الأنميات القديمة لا تمتلكه في القاعدة بعد!
+        // استخراج TMDB ID من الخريطة الحية مباشرة
         let currentTmdbInfo = tmdbMap[anime.id];
         let activeTmdbId = anime.tmdb_id || (currentTmdbInfo ? currentTmdbInfo.tmdb_id : null);
         let activeTmdbType = anime.tmdb_type || (currentTmdbInfo ? currentTmdbInfo.tmdb_type : null);
         
-        // 1. محاولة ترقية الصورة إلى TMDB (باستخدام المعرف النشط)
+        // 1. محاولة ترقية الصورة إلى TMDB
         if (activeTmdbId && TMDB_API_KEY !== 'YOUR_TMDB_API_KEY_HERE') {
             try {
                 const tmdbRes = await fetch(`https://api.themoviedb.org/3/${activeTmdbType}/${activeTmdbId}?api_key=${TMDB_API_KEY}&append_to_response=images&include_image_language=en,null`);
@@ -324,7 +327,6 @@ async function main() {
                         anime.bannerImage = `https://image.tmdb.org/t/p/w1280${tmdbData.backdrop_path}`;
                     }
                     
-                    // تحديث الأنمي في القاعدة ليحتفظ ببيانات TMDB للمستقبل
                     anime.tmdb_id = activeTmdbId;
                     anime.tmdb_type = activeTmdbType;
                 }
@@ -332,32 +334,41 @@ async function main() {
             await delay(250); // الحفاظ على استقرار الـ API
         }
         
-        // 2. إذا نجح TMDB، نسجل ذلك
         if (fixedWithTmdb) {
-            fixCount++;
+            tmdbFixCount++;
             console.log(`🎬 تم ترقية صور ${anime.title.romaji || anime.id} لـ TMDB`);
         } 
-        // 3. إذا فشل TMDB (أو لم يُعثر على الأنمي)، نجبره على العودة لـ Kitsu فوراً
-        else if (anime.kitsu_id && anime.coverImage && anime.coverImage.large && !anime.coverImage.large.includes('kitsu.app')) {
-            anime.coverImage.large = `https://media.kitsu.app/anime/poster_images/${anime.kitsu_id}/large.jpg`;
-            anime.coverImage.medium = `https://media.kitsu.app/anime/poster_images/${anime.kitsu_id}/medium.jpg`;
-            if (!anime._isBannerProtected) {
-                anime.bannerImage = `https://media.kitsu.app/anime/cover_images/${anime.kitsu_id}/large.jpg`;
+        // 2. 🩹 الطوارئ: إذا فشل TMDB وكانت الصورة مكسورة (kitsu.app)، نستدعي MAL لترميمها
+        else if (anime.coverImage && anime.coverImage.large && anime.coverImage.large.includes('kitsu.app')) {
+            if (anime.mal_id) {
+                try {
+                    const jikanRes = await fetch(`https://api.jikan.moe/v4/anime/${anime.mal_id}`);
+                    if (jikanRes.ok) {
+                        const jikanData = await jikanRes.json();
+                        const malImage = jikanData.data?.images?.jpg?.large_image_url;
+                        if (malImage) {
+                            anime.coverImage.large = malImage;
+                            anime.coverImage.medium = malImage;
+                            fallbackFixCount++;
+                            console.log(`🩹 تم ترميم صورة ${anime.title.romaji || anime.id} المكسورة بـ MAL`);
+                        }
+                    }
+                } catch (e) {}
+                await delay(1100); // ⏱️ تأخير لتجنب حظر سيرفر Jikan
             }
-            fixCount++;
-            console.log(`🦊 تم استعادة صورة ${anime.title.romaji || anime.id} لـ Kitsu`);
         }
 
         delete anime._isProtected;
         delete anime._isBannerProtected;
     }
 
-    if (fixCount > 0) {
-        console.log(`✅ تمت ترقية/استعادة ${fixCount} أنمي في قاعدة البيانات.`);
+    if (tmdbFixCount > 0 || fallbackFixCount > 0) {
+        console.log(`✅ تمت ترقية ${tmdbFixCount} أنمي لـ TMDB، وترميم ${fallbackFixCount} صورة مكسورة.`);
         saveJSON(ALL_ANIME_FILE, allAnime); 
     } else {
-        console.log('✅ جميع الصور في قاعدة البيانات مُحدثة وبأعلى جودة.');
+        console.log('✅ جميع الصور في قاعدة البيانات مُحدثة وتعمل بشكل سليم.');
     }
+
     // ══════════════════════════════════════════════════════════════
     
     console.log('⚡ ثالثاً: جاري بناء السجل التراكمي المباشر...');
