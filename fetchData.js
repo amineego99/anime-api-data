@@ -3,7 +3,10 @@ const path = require('path');
 
 const ANILIST_API_URL = 'https://graphql.anilist.co';
 const AOD_URL = 'https://github.com/manami-project/anime-offline-database/releases/latest/download/anime-offline-database-minified.json';
-const IMGBB_API_KEY = 'b319ae56c851eecbb26149310233535b';
+const IMGBB_API_KEY = '4d5e9c032af82adb668dc2882b100798';
+
+// 🌟 التعديل الأول: مفتاح للتحكم في فحص الصور (ضع true للتفعيل أو false للتعطيل)
+const ENABLE_IMAGE_VALIDATION = false; 
 
 const DB_DIR = path.join(__dirname, 'api');
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
@@ -54,6 +57,9 @@ async function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)
 
 // 🌟 الدالة الجديدة: فحص الرابط للتأكد من أن الصورة موجودة فعلاً وليست مكسورة 🌟
 async function isImageValid(url) {
+    // 🌟 تطبيق شرط التفعيل/التعطيل
+    if (!ENABLE_IMAGE_VALIDATION) return true; 
+
     if (!url) return false;
     try {
         const controller = new AbortController();
@@ -414,6 +420,11 @@ async function main() {
     
     for (let i = 0; i < allAnime.length; i++) {
         let anime = allAnime[i];
+        
+        // 🌟 التعديل الثاني: التحقق مما إذا كان الأنمي هينتاي، وإذا لم يكن كذلك نتخطاه
+        const isHentai = anime.genres && anime.genres.some(g => g.toLowerCase() === 'hentai');
+        if (!isHentai) continue;
+
         let isUpdated = false;
 
         let freshDB = loadJSON(ALL_ANIME_FILE);
