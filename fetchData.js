@@ -75,7 +75,7 @@ async function checkImageStrict(url) {
         const res = await fetch(url, { 
             method: 'GET', 
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
             },
             signal: controller.signal 
@@ -86,6 +86,29 @@ async function checkImageStrict(url) {
         return { valid: isValid, status: res.status };
     } catch (e) {
         return { valid: false, status: 'TIMEOUT_OR_ERROR' };
+    }
+}
+
+// 🌟 دالة جديدة: جلب الروابط الرسمية المضمونة من Kitsu API بدلاً من تخمينها
+async function fetchKitsuImages(kitsuId) {
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        const res = await fetch(`https://kitsu.io/api/edge/anime/${kitsuId}`, {
+            headers: { 'Accept': 'application/vnd.api+json' },
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        if (!res.ok) return null;
+        const json = await res.json();
+        const attrs = json.data.attributes;
+        return {
+            cover: attrs.posterImage ? (attrs.posterImage.large || attrs.posterImage.original) : null,
+            coverMedium: attrs.posterImage ? (attrs.posterImage.medium || attrs.posterImage.large) : null,
+            banner: attrs.coverImage ? (attrs.coverImage.large || attrs.coverImage.original) : null
+        };
+    } catch (e) {
+        return null;
     }
 }
 
@@ -257,9 +280,9 @@ async function main() {
     let animeMap = new Map(allAnime.map((a, i) => [a.id, i]));
 
     // ══════════════════════════════════════════════════════════════
-    // 🟠 صفر: مراجعة لتعديل روابط (AniList/MAL) فقط وتخطي (Kitsu/ImgBB)
+    // 🟠 صفر: مراجعة ذكية عبر Kitsu API (تتجاهل Kitsu/ImgBB وتعدل الباقي)
     // ══════════════════════════════════════════════════════════════
-    console.log('🔍 صفر: فحص مبدئي للروابط (تجاهل Kitsu و ImgBB وتعديل AniList/MAL فقط)...');
+    console.log('🔍 صفر: فحص الروابط (AniList/MAL) وتحديثها باستخدام Kitsu API...');
     let initialUpdates = 0;
     let failedUpdates = 0;
 
@@ -272,68 +295,69 @@ async function main() {
         }
         let kitsuId = anime.kitsu_id;
         let animeName = anime.title.romaji || anime.id;
+        let needsKitsuFetch = false;
 
-        // --- 1. فحص صورة الغلاف (Cover) ---
+        // هل الغلاف يحتاج تحديث؟
         if (anime.coverImage && anime.coverImage.large) {
             let coverUrl = anime.coverImage.large;
-            let isImgbb = coverUrl.includes('ibb.co');
-            let isKitsu = coverUrl.includes('kitsu.app') || coverUrl.includes('kitsu.io');
-
-            // التعديل الصارم: إذا لم يكن Kitsu ولم يكن ImgBB، نقوم بمحاولة التحديث
-            if (!isImgbb && !isKitsu) {
-                if (kitsuId) {
-                    let targetKitsuCover = `https://media.kitsu.app/anime/poster_images/${kitsuId}/large.jpg`;
-                    console.log(`🔄 [جاري التحديث] ${animeName} | الغلاف (AniList/MAL) -> فحص Kitsu البديل...`);
-                    
-                    let targetCheck = await checkImageStrict(targetKitsuCover);
-                    
-                    if (targetCheck.valid) {
-                        anime.coverImage.large = targetKitsuCover;
-                        anime.coverImage.medium = `https://media.kitsu.app/anime/poster_images/${kitsuId}/medium.jpg`;
-                        isUpdated = true;
-                        console.log(`✅ [نجاح الغلاف] ${animeName}: تم التحديث إلى Kitsu بنجاح.`);
-                    } else {
-                        failedUpdates++;
-                        console.log(`❌ [فشل الغلاف] ${animeName}: الرابط البديل لا يعمل (Status: ${targetCheck.status}). الإبقاء على القديم.`);
-                    }
-                    await delay(300); 
-                }
+            if (!coverUrl.includes('ibb.co') && !coverUrl.includes('kitsu.app') && !coverUrl.includes('kitsu.io')) {
+                needsKitsuFetch = true;
+            }
+        }
+        // هل البانر يحتاج تحديث؟
+        if (anime.bannerImage) {
+            let bannerUrl = anime.bannerImage;
+            if (!bannerUrl.includes('ibb.co') && !bannerUrl.includes('kitsu.app') && !bannerUrl.includes('kitsu.io')) {
+                needsKitsuFetch = true;
             }
         }
 
-        // --- 2. فحص صورة البانر (Banner) ---
-        if (anime.bannerImage) {
-            let bannerUrl = anime.bannerImage;
-            let isImgbb = bannerUrl.includes('ibb.co');
-            let isKitsu = bannerUrl.includes('kitsu.app') || bannerUrl.includes('kitsu.io');
-
-            // التعديل الصارم: إذا لم يكن Kitsu ولم يكن ImgBB، نقوم بمحاولة التحديث
-            if (!isImgbb && !isKitsu) {
-                if (kitsuId) {
-                    let targetKitsuBanner = `https://media.kitsu.app/anime/cover_images/${kitsuId}/large.jpg`;
-                    console.log(`🔄 [جاري التحديث] ${animeName} | البانر (AniList/MAL) -> فحص بانر Kitsu البديل...`);
-                    
-                    let targetCheck = await checkImageStrict(targetKitsuBanner);
-                    
-                    if (targetCheck.valid) {
-                        anime.bannerImage = targetKitsuBanner;
+        // إذا كان هناك حاجة للتحديث ويوجد Kitsu ID، نسأل الـ API مباشرة
+        if (needsKitsuFetch && kitsuId) {
+            console.log(`🔄 [جلب من Kitsu API] ${animeName} (ID: ${kitsuId})...`);
+            let kitsuData = await fetchKitsuImages(kitsuId);
+            
+            if (kitsuData) {
+                // تحديث الغلاف إذا لزم الأمر
+                let coverUrl = anime.coverImage?.large || '';
+                if (!coverUrl.includes('ibb.co') && !coverUrl.includes('kitsu.app') && !coverUrl.includes('kitsu.io')) {
+                    if (kitsuData.cover) {
+                        anime.coverImage.large = kitsuData.cover;
+                        anime.coverImage.medium = kitsuData.coverMedium || kitsuData.cover;
                         isUpdated = true;
-                        console.log(`✅ [نجاح البانر] ${animeName}: تم التحديث إلى Kitsu بنجاح.`);
+                        console.log(`  ✅ تم تحديث الغلاف للرابط الرسمي.`);
                     } else {
                         failedUpdates++;
-                        console.log(`❌ [فشل البانر] ${animeName}: البانر البديل لا يعمل (Status: ${targetCheck.status}). الإبقاء على القديم.`);
+                        console.log(`  ❌ Kitsu لا يملك غلافاً لهذا الأنمي.`);
                     }
-                    await delay(300);
                 }
+
+                // تحديث البانر إذا لزم الأمر
+                let bannerUrl = anime.bannerImage || '';
+                if (bannerUrl && !bannerUrl.includes('ibb.co') && !bannerUrl.includes('kitsu.app') && !bannerUrl.includes('kitsu.io')) {
+                    if (kitsuData.banner) {
+                        anime.bannerImage = kitsuData.banner;
+                        isUpdated = true;
+                        console.log(`  ✅ تم تحديث البانر للرابط الرسمي.`);
+                    } else {
+                        failedUpdates++;
+                        console.log(`  ❌ Kitsu لا يملك بانر (Cover) لهذا الأنمي.`);
+                    }
+                }
+            } else {
+                failedUpdates++;
+                console.log(`❌ [فشل الاتصال] الأنمي غير موجود في Kitsu API.`);
             }
+            // 🌟 تأخير 600 ملي ثانية لعدم التسبب بحظر من Kitsu API
+            await delay(600); 
         }
 
         if (isUpdated) initialUpdates++;
     }
 
-    console.log(`\n📊 [إحصائيات الفحص الأولي]`);
+    console.log(`\n📊 [إحصائيات الفحص الأولي الذكي]`);
     console.log(`- الأنميات التي تم تحويلها بنجاح إلى Kitsu: ${initialUpdates}`);
-    console.log(`- الأنميات التي فشل تحويلها وتم الإبقاء على روابطها القديمة: ${failedUpdates}`);
+    console.log(`- الأنميات التي تم الإبقاء على روابطها القديمة (لعدم توفرها في Kitsu): ${failedUpdates}`);
 
     if (initialUpdates > 0) {
         console.log(`جاري حفظ البيانات المبدئية...`);
