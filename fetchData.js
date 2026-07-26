@@ -1,6 +1,14 @@
 const fs = require('fs');
 const path = require('path');
 
+// 🌟 خدعة إجبار السيرفر على طباعة السجلات (Logs) فور حدوثها لحظة بلحظة
+const originalLog = console.log;
+console.log = (...args) => {
+    // تحويل البيانات لصوص وتوجيهها للقناة الفورية
+    const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' ');
+    process.stderr.write(msg + '\n');
+};
+
 const ANILIST_API_URL = 'https://graphql.anilist.co';
 const AOD_URL = 'https://github.com/manami-project/anime-offline-database/releases/latest/download/anime-offline-database-minified.json';
 const IMGBB_API_KEY = 'b319ae56c851eecbb26149310233535b';
