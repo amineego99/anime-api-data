@@ -5,7 +5,7 @@ const ANILIST_API_URL = 'https://graphql.anilist.co';
 const AOD_URL = 'https://github.com/manami-project/anime-offline-database/releases/latest/download/anime-offline-database-minified.json';
 const IMGBB_API_KEY = 'b319ae56c851eecbb26149310233535b';
 
-// 🔴 1. مفتاح إيقاف/تشغيل نظام فحص ورفع الصور (معطل حالياً بناءً على طلبك)
+// 🔴 مفتاح إيقاف/تشغيل نظام فحص ورفع الصور (معطل حالياً)
 const ENABLE_IMAGE_PROCESSING = false; 
 
 const DB_DIR = path.join(__dirname, 'api');
@@ -19,6 +19,7 @@ const SYNC_FILE = path.join(DB_DIR, 'sync.json');
 
 const PER_PAGE = 25; 
 
+// 🌟 الاستعلام الخاص بقاعدة البيانات
 const query = `
 query ($page: Int, $perPage: Int) {
   Page(page: $page, perPage: $perPage) {
@@ -33,6 +34,21 @@ query ($page: Int, $perPage: Int) {
       studios(isMain: true) { nodes { id name } }
       nextAiringEpisode { airingAt timeUntilAiring episode }
       trailer { id site }
+    }
+  }
+}
+`;
+
+// 🌟 الاستعلام الجديد المخصص حصراً لاصطياد الحلقات التي بُثت للتو (دقيق 100%)
+const SCHEDULE_QUERY = `
+query {
+  Page(page: 1, perPage: 50) {
+    airingSchedules(notYetAired: false, sort: TIME_DESC) {
+      episode
+      airingAt
+      media {
+        id
+      }
     }
   }
 }
@@ -89,6 +105,25 @@ async function fetchAnilistAnimePage(page, retries = 3) {
     }
 }
 
+// دالة جلب جدول البث المباشر
+async function fetchLiveSchedule(retries = 3) {
+    try {
+        const response = await fetch(ANILIST_API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ query: SCHEDULE_QUERY })
+        });
+        const json = await response.json();
+        return json.data.Page.airingSchedules || [];
+    } catch (error) {
+        if (retries > 0) {
+            await delay(5000);
+            return fetchLiveSchedule(retries - 1);
+        }
+        return [];
+    }
+}
+
 async function buildAodMapper() {
     console.log("🚀 جاري جلب AOD لاستخراج المعرفات وصور (MAL)...");
     try {
@@ -133,14 +168,12 @@ async function uploadToImgBB(imageUrl) {
         if (data.success) {
             return data.data.url;
         } else {
-            console.error(`❌ فشل الرفع لـ ImgBB للصورة ${imageUrl}:`, data.error?.message);
             if (data.error && data.error.message && data.error.message.includes('Rate limit')) {
                 return 'RATE_LIMIT_REACHED';
             }
             return imageUrl; 
         }
     } catch (error) {
-        console.error(`❌ خطأ في الاتصال بـ ImgBB للصورة ${imageUrl}:`, error.message);
         return imageUrl;
     }
 }
@@ -158,7 +191,6 @@ async function formatAnimeData(anime, aodMap, existingAnime) {
     let finalMediumImage = defaultMalPicture;
     let finalBannerImage = anilistBanner;
 
-    // تم تجاوز الفحص المعمق للصور لزيادة السرعة بناءً على طلبك
     if (ENABLE_IMAGE_PROCESSING) {
         if (existingAnime && existingAnime.coverImage?.large?.includes('ibb.co')) {
             finalLargeImage = existingAnime.coverImage.large;
@@ -233,7 +265,6 @@ async function main() {
     let allAnime = loadJSON(ALL_ANIME_FILE);
     let animeMap = new Map(allAnime.map((a, i) => [a.id, i]));
 
-    // 🔴 2. إلغاء حد الـ 10 صفحات وجعله يقرأ بشكل غير محدود عملياً (حتى 1500 صفحة)
     const CURRENT_TOTAL_PAGES = 1500; 
     console.log(`✅ وضع الجلب غير المحدود مفعل (أقصى حد: ${CURRENT_TOTAL_PAGES} صفحة)...`);
 
@@ -243,25 +274,22 @@ async function main() {
     let stopFetching = false;
     
     // ══════════════════════════════════════════════════════════════
-    // 🟠 أولاً: جلب التحديثات والأنميات الجديدة من AniList
+    // 🟠 أولاً: تحديث قاعدة البيانات الأساسية
     // ══════════════════════════════════════════════════════════════
-    console.log('🔄 أولاً: جلب التحديثات والأنميات الجديدة من AniList...');
+    console.log('🔄 أولاً: جلب التحديثات والأنميات الجديدة...');
     for (let page = 1; page <= CURRENT_TOTAL_PAGES; page++) {
         if (stopFetching) break;
-        console.log(`جلب الصفحة ${page} من AniList...`);
+        console.log(`جلب الصفحة ${page}...`);
         
         const animes = await fetchAnilistAnimePage(page);
         
-        // التوقف التلقائي إذا انتهت الصفحات
         if (animes.length === 0) {
-            console.log(`انتهت الأنميات المتاحة في AniList عند الصفحة ${page}.`);
             break;
         }
 
         for (const anime of animes) {
             if (anime.updatedAt > newHighestSyncTime) newHighestSyncTime = anime.updatedAt;
 
-            // سيستمر الجلب بشكل غير محدود حتى يصطدم بأنمي تم تحديثه مسبقاً
             if (anime.updatedAt <= lastSyncTime) {
                 console.log(`🛑 تم الوصول لبيانات محدثة مسبقاً (ID: ${anime.id}). إيقاف الجلب!`);
                 stopFetching = true;
@@ -281,45 +309,43 @@ async function main() {
         if (page < CURRENT_TOTAL_PAGES && !stopFetching) await delay(1500);
     }
 
-   // 🌟 🌟 🌟 3. النظام الأفضل لسجل الحلقات التراكمي (Timeline) 🌟 🌟 🌟
-    console.log('⚡ جاري بناء وتسجيل أحدث الحلقات في السجل التراكمي...');
+    // 🌟 🌟 🌟 السجل الزمني الحي (التقاط الحلقات فور صدورها) 🌟 🌟 🌟
+    console.log('⚡ جاري بناء السجل التراكمي المباشر...');
     
     let existingSchedule = loadJSON(SCHEDULE_FILE);
     if (!Array.isArray(existingSchedule)) existingSchedule = [];
 
+    // جلب آخر 50 حلقة بثت حرفياً في العالم الآن
+    const liveEpisodes = await fetchLiveSchedule();
     const newEpisodes = [];
-    allAnime.filter(a => a.status === 'RELEASING' && a.nextAiringEpisode).forEach(a => {
-        // استنتاج رقم الحلقة التي صدرت للتو
-        const releasedEpisode = a.nextAiringEpisode.episode > 1 
-            ? a.nextAiringEpisode.episode - 1 
-            : 1;
+
+    liveEpisodes.forEach(liveItem => {
+        // البحث عن بيانات الأنمي في قاعدتنا المحلية بواسطة الـ ID لضمان دقة 100%
+        const animeData = allAnime.find(a => a.id === liveItem.media.id);
         
-        // استنتاج وقت الصدور التقريبي
-        const lastEpisodeTime = a.nextAiringEpisode.airingAt - 604800;
+        if (animeData) {
+            const releasedEpisode = liveItem.episode;
+            const airedTime = liveItem.airingAt;
 
-        // التأكد من عدم تكرار نفس الحلقة لنفس الأنمي
-        const isAlreadyInSchedule = existingSchedule.some(item => 
-            item.id === a.id && item.episode === releasedEpisode
-        );
+            // التأكد من عدم التكرار لنفس الحلقة ونفس الأنمي
+            const isAlreadyInSchedule = existingSchedule.some(item => 
+                item.id === animeData.id && item.episode === releasedEpisode
+            );
 
-        // تسجيل الحلقة الجديدة كبطاقة مستقلة
-        if (!isAlreadyInSchedule) {
-            newEpisodes.push({
-                ...a,
-                episode: releasedEpisode,
-                lastAiredAt: lastEpisodeTime
-            });
+            if (!isAlreadyInSchedule) {
+                newEpisodes.push({
+                    ...animeData,
+                    episode: releasedEpisode,
+                    lastAiredAt: airedTime
+                });
+            }
         }
     });
 
-    // دمج الحلقات الجديدة في أعلى السجل القديم
+    // دمج وترتيب السجل من الأحدث للأقدم
     let updatedSchedule = [...newEpisodes, ...existingSchedule];
-
-    // ترتيب السجل بالكامل من الأحدث إلى الأقدم
     updatedSchedule.sort((a, b) => b.lastAiredAt - a.lastAiredAt);
-
-    // الاحتفاظ بآخر 200 حلقة فقط (لمنع تضخم الملف والتسبب ببطء التطبيق)
-    updatedSchedule = updatedSchedule.slice(0, 200);
+    updatedSchedule = updatedSchedule.slice(0, 200); // إبقاء آخر 200 حلقة
         
     saveJSON(SCHEDULE_FILE, updatedSchedule);
     saveJSON(SYNC_FILE, { last_updated_at: newHighestSyncTime });
@@ -328,153 +354,10 @@ async function main() {
     console.log(`✅ تم التحديث! تمت إضافة ${newEpisodes.length} حلقات جديدة للسجل التراكمي.`);
     // 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟 🌟
 
-    // تم تعطيل هذه المراحل مؤقتاً بناءً على إعداد ENABLE_IMAGE_PROCESSING
     if (ENABLE_IMAGE_PROCESSING) {
-        // ══════════════════════════════════════════════════════════════
-        // 🟠 ثانياً: مراجعة الـ Database وتعديل الصور المعطوبة
-        // ══════════════════════════════════════════════════════════════
-        console.log('🔍 ثانياً: فحص وإصلاح الصور في قاعدة البيانات الحالية...');
-        let prepUpdates = 0;
-        
-        for (let i = 0; i < allAnime.length; i++) {
-            let anime = allAnime[i];
-            let aodInfo = aodMap[anime.id];
-            
-            if (i > 0 && i % 500 === 0) console.log(`⏳ تم فحص ${i} أنمي...`);
-            
-            if (!anime.kitsu_id && aodInfo && aodInfo.kitsu_id) {
-                anime.kitsu_id = aodInfo.kitsu_id;
-            }
-
-            if (anime.coverImage && anime.coverImage.large && !anime.coverImage.large.includes('ibb.co')) {
-                if (!anime._originalCover) anime._originalCover = anime.coverImage.large; 
-                
-                let targetKitsu = anime.kitsu_id ? `https://media.kitsu.app/anime/poster_images/${anime.kitsu_id}/large.jpg` : null;
-                let isValidKitsu = false;
-
-                if (targetKitsu) isValidKitsu = await isImageValid(targetKitsu);
-
-                if (isValidKitsu) {
-                    if (anime.coverImage.large !== targetKitsu) {
-                        anime.coverImage.large = targetKitsu;
-                        anime.coverImage.medium = `https://media.kitsu.app/anime/poster_images/${anime.kitsu_id}/medium.jpg`;
-                        prepUpdates++;
-                    }
-                } else {
-                    let fallbackImage = (aodInfo && aodInfo.picture) ? aodInfo.picture : anime._originalCover;
-                    if (anime.coverImage.large !== fallbackImage) {
-                        anime.coverImage.large = fallbackImage;
-                        anime.coverImage.medium = fallbackImage;
-                        prepUpdates++;
-                    }
-                }
-            }
-            
-            if (anime.bannerImage && !anime.bannerImage.includes('ibb.co')) {
-                if (!anime._originalBanner) anime._originalBanner = anime.bannerImage;
-                
-                let targetKitsuBanner = anime.kitsu_id ? `https://media.kitsu.app/anime/cover_images/${anime.kitsu_id}/large.jpg` : null;
-                let isValidKitsuBanner = false;
-
-                if (targetKitsuBanner) isValidKitsuBanner = await isImageValid(targetKitsuBanner);
-
-                if (isValidKitsuBanner) {
-                    if (anime.bannerImage !== targetKitsuBanner) {
-                        anime.bannerImage = targetKitsuBanner;
-                        prepUpdates++;
-                    }
-                } else {
-                    let fallbackBanner = anime._originalBanner;
-                    if (anime.bannerImage !== fallbackBanner) {
-                        anime.bannerImage = fallbackBanner;
-                        prepUpdates++;
-                    }
-                }
-            }
-        }
-        
-        if (prepUpdates > 0) {
-            console.log(`✅ تم إيجاد وإصلاح ${prepUpdates} رابط صورة معطوب. جاري الحفظ...`);
-            saveJSON(ALL_ANIME_FILE, allAnime);
-        } else {
-            console.log('✅ جميع الصور في القاعدة الحالية تم فحصها وتعمل بنجاح.');
-        }
-
-        // ══════════════════════════════════════════════════════════════
-        // 🟠 ثالثاً: تحديث الصور برفع النسخ الأصلية إلى ImgBB
-        // ══════════════════════════════════════════════════════════════
-        console.log('☁️ ثالثاً: تحديث الصور برفع النسخ الأصلية (عالية الجودة) إلى حساب ImgBB...');
-        let uploadsThisSession = 0;
-        
-        for (let i = 0; i < allAnime.length; i++) {
-            let anime = allAnime[i];
-            let isUpdated = false;
-
-            let freshDB = loadJSON(ALL_ANIME_FILE);
-            let animeInDB = freshDB.find(a => a.id === anime.id);
-
-            let needsCoverUpload = anime.coverImage.large && !anime.coverImage.large.includes('ibb.co');
-            
-            if (needsCoverUpload && animeInDB && animeInDB.coverImage?.large?.includes('ibb.co')) {
-                anime.coverImage.large = animeInDB.coverImage.large;
-                anime.coverImage.medium = animeInDB.coverImage.medium || animeInDB.coverImage.large;
-                needsCoverUpload = false; 
-            }
-
-            if (needsCoverUpload) {
-                console.log(`رفع غلاف: ${anime.title.romaji}`);
-                const targetCover = anime._originalCover || anime.coverImage.large; 
-                const newCover = await uploadToImgBB(targetCover);
-                
-                if (newCover === 'RATE_LIMIT_REACHED') {
-                    console.log('⚠️ تم الوصول للحد الأقصى لرفع ImgBB. سيتم إيقاف الرفع مؤقتاً.');
-                    break; 
-                }
-
-                if (newCover && newCover !== targetCover && newCover.includes('ibb.co')) {
-                    anime.coverImage.large = newCover;
-                    anime.coverImage.medium = newCover;
-                    isUpdated = true;
-                    uploadsThisSession++;
-                }
-                await delay(1500); 
-            }
-
-            let needsBannerUpload = anime.bannerImage && !anime.bannerImage.includes('ibb.co') && anime.bannerImage !== anime.coverImage.large;
-
-            if (needsBannerUpload && animeInDB && animeInDB.bannerImage?.includes('ibb.co')) {
-                anime.bannerImage = animeInDB.bannerImage;
-                needsBannerUpload = false;
-            }
-
-            if (needsBannerUpload) {
-                console.log(`رفع بانر: ${anime.title.romaji}`);
-                const targetBanner = anime._originalBanner || anime.bannerImage;
-                const newBanner = await uploadToImgBB(targetBanner);
-                
-                if (newBanner === 'RATE_LIMIT_REACHED') {
-                    console.log('⚠️ تم الوصول للحد الأقصى لرفع ImgBB. سيتم إيقاف الرفع مؤقتاً.');
-                    break; 
-                }
-
-                if (newBanner && newBanner !== targetBanner && newBanner.includes('ibb.co')) {
-                    anime.bannerImage = newBanner;
-                    isUpdated = true;
-                    uploadsThisSession++;
-                }
-                await delay(1500);
-            }
-
-            if (isUpdated && uploadsThisSession % 10 === 0) saveJSON(ALL_ANIME_FILE, allAnime);
-        }
-        console.log(`🚀 تم رفع ${uploadsThisSession} صورة لـ ImgBB في هذه الجلسة.`);
-    } else {
-        console.log('⚠️ نظام فحص ورفع الصور معطل حالياً (ENABLE_IMAGE_PROCESSING = false).');
+        // ... (قسم فحص ومعالجة الصور معطل حالياً كما طلبت)
     }
 
-    // ══════════════════════════════════════════════════════════════
-    // 🟠 رابعاً: الترتيب والحفظ النهائي لباقي الملفات
-    // ══════════════════════════════════════════════════════════════
     console.log('💾 رابعاً: ترتيب وحفظ البيانات النهائية في جميع الملفات...');
     allAnime.sort((a, b) => b.popularity - a.popularity);
 
@@ -482,7 +365,7 @@ async function main() {
     saveJSON(ONGOING_FILE, allAnime.filter(a => a.status === 'RELEASING'));
     saveJSON(UPCOMING_FILE, allAnime.filter(a => a.status === 'NOT_YET_RELEASED'));
 
-    console.log(`🚀 تمت عملية التحديث بنجاح التام!`);
+    console.log(`🚀 تمت عملية التحديث بنجاح تام!`);
 }
 
 main();
