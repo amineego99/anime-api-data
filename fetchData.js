@@ -57,24 +57,8 @@ async function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)
 
 // 🌟 الدالة الجديدة: فحص الرابط للتأكد من أن الصورة موجودة فعلاً وليست مكسورة 🌟
 async function isImageValid(url) {
-    // 🌟 تطبيق شرط التفعيل/التعطيل
     if (!ENABLE_IMAGE_VALIDATION) return true; 
 
-    if (!url) return false;
-    try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 4000); // مهلة 4 ثوانٍ كحد أقصى
-        const res = await fetch(url, { method: 'HEAD', signal: controller.signal });
-        clearTimeout(timeoutId);
-        // نعتبر الصورة صالحة إذا كان الرد 200 (OK) أو 304 (Not Modified)
-        return res.ok || res.status === 304; 
-    } catch (e) {
-        return false;
-    }
-}
-
-// 🌟 دالة الفحص الصارمة الإجبارية (تُستخدم للمراجعة الأولى للصور ولا تتأثر بمفتاح التعطيل) 🌟
-async function checkImageStrict(url) {
     if (!url) return false;
     try {
         const controller = new AbortController();
@@ -84,6 +68,27 @@ async function checkImageStrict(url) {
         return res.ok || res.status === 304; 
     } catch (e) {
         return false;
+    }
+}
+
+// 🌟 دالة الفحص الصارمة الإجبارية (مُحسنة لتخطي الحمايات وإرجاع تفاصيل الخطأ) 🌟
+async function checkImageStrict(url) {
+    if (!url) return { valid: false, status: 0 };
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000); 
+        const res = await fetch(url, { 
+            method: 'HEAD', 
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+            },
+            signal: controller.signal 
+        });
+        clearTimeout(timeoutId);
+        return { valid: res.ok || res.status === 304, status: res.status };
+    } catch (e) {
+        return { valid: false, status: 'TIMEOUT_OR_ERROR' };
     }
 }
 
@@ -188,7 +193,7 @@ async function formatAnimeData(anime, aodMap, existingAnime) {
         finalMediumImage = existingAnime.coverImage.medium;
     } else if (kitsuId) {
         const targetKitsu = `https://media.kitsu.app/anime/poster_images/${kitsuId}/large.jpg`;
-        const isValid = await isImageValid(targetKitsu); // 🌟 التأكد من وجود الصورة
+        const isValid = await isImageValid(targetKitsu); 
         if (isValid) {
             finalLargeImage = targetKitsu;
             finalMediumImage = `https://media.kitsu.app/anime/poster_images/${kitsuId}/medium.jpg`;
@@ -202,7 +207,7 @@ async function formatAnimeData(anime, aodMap, existingAnime) {
         finalBannerImage = existingAnime.bannerImage;
     } else if (kitsuId) {
         const targetKitsuBanner = `https://media.kitsu.app/anime/cover_images/${kitsuId}/large.jpg`;
-        const isValidBanner = await isImageValid(targetKitsuBanner); // 🌟 التأكد من وجود البانر
+        const isValidBanner = await isImageValid(targetKitsuBanner); 
         if (isValidBanner) {
             finalBannerImage = targetKitsuBanner;
         } else {
@@ -256,15 +261,17 @@ async function main() {
     let animeMap = new Map(allAnime.map((a, i) => [a.id, i]));
 
     // ══════════════════════════════════════════════════════════════
-    // 🟠 صفر: مراجعة صارمة لروابط الصور وحمايتها (حسب الطلب الدقيق)
+    // 🟠 صفر: مراجعة صارمة لروابط الصور وحمايتها (مع Logs مفصلة)
     // ══════════════════════════════════════════════════════════════
-    console.log('🔍 صفر: فحص مبدئي صارم لروابط قاعدة البيانات للتأكد من سلامتها...');
+    console.log('🔍 صفر: فحص مبدئي صارم لروابط قاعدة البيانات للتأكد من سلامتها (الآن مع سجلات مفصلة)...');
     let initialUpdates = 0;
+    let failedUpdates = 0;
 
     for (let i = 0; i < allAnime.length; i++) {
         let anime = allAnime[i];
         let isUpdated = false;
         let kitsuId = anime.kitsu_id || (aodMap[anime.id] ? aodMap[anime.id].kitsu_id : null);
+        let animeName = anime.title.romaji || anime.id;
 
         // --- 1. فحص صورة الغلاف (Cover) ---
         if (anime.coverImage && anime.coverImage.large) {
@@ -272,30 +279,42 @@ async function main() {
             let isImgbb = coverUrl.includes('ibb.co');
             let isKitsu = coverUrl.includes('kitsu');
             let needsUpdate = false;
+            let logReason = '';
 
             if (isImgbb) {
-                // صارم: لا تلمس ImgBB أبداً
                 needsUpdate = false;
             } else if (isKitsu) {
-                // صارم: تأكد أن Kitsu يعمل أولاً
-                let isValid = await checkImageStrict(coverUrl);
-                if (!isValid) needsUpdate = true; // Kitsu معطل -> يجب تغييره
+                let check = await checkImageStrict(coverUrl);
+                if (!check.valid) {
+                    needsUpdate = true;
+                    logReason = `رابط Kitsu معطل (Status: ${check.status})`;
+                }
             } else {
-                // رابط آخر (مثل AniList) -> حاول تغييره
-                needsUpdate = true; 
+                needsUpdate = true;
+                logReason = `الرابط ليس من Kitsu ولا ImgBB`;
             }
 
-            // محاولة التغيير فقط إن استدعى الأمر وبشرط توفر Kitsu بديل يعمل
-            if (needsUpdate && kitsuId) {
-                let targetKitsuCover = `https://media.kitsu.app/anime/poster_images/${kitsuId}/large.jpg`;
-                let isTargetValid = await checkImageStrict(targetKitsuCover);
-                
-                if (isTargetValid) {
-                    anime.coverImage.large = targetKitsuCover;
-                    anime.coverImage.medium = `https://media.kitsu.app/anime/poster_images/${kitsuId}/medium.jpg`;
-                    isUpdated = true;
+            if (needsUpdate) {
+                if (!kitsuId) {
+                    console.log(`⚠️ [تخطي الغلاف] ${animeName}: ${logReason} ولكن لا يوجد معرف Kitsu متاح.`);
+                } else {
+                    let targetKitsuCover = `https://media.kitsu.app/anime/poster_images/${kitsuId}/large.jpg`;
+                    console.log(`🔄 [جاري التحديث] ${animeName} | الغلاف: ${logReason} -> محاولة فحص رابط Kitsu البديل...`);
+                    
+                    let targetCheck = await checkImageStrict(targetKitsuCover);
+                    
+                    if (targetCheck.valid) {
+                        anime.coverImage.large = targetKitsuCover;
+                        anime.coverImage.medium = `https://media.kitsu.app/anime/poster_images/${kitsuId}/medium.jpg`;
+                        isUpdated = true;
+                        console.log(`✅ [نجاح الغلاف] ${animeName}: تم التحديث إلى Kitsu بنجاح.`);
+                    } else {
+                        failedUpdates++;
+                        console.log(`❌ [فشل الغلاف] ${animeName}: الرابط البديل من Kitsu لا يعمل (Status: ${targetCheck.status}). الإبقاء على الرابط القديم لحمايته.`);
+                    }
+                    // 🌟 تأخير 150 ملي ثانية لتجنب الحظر (429 Rate Limit) من Kitsu 🌟
+                    await delay(150); 
                 }
-                // إن لم يكن Kitsu البديل صالحاً، يُترك الرابط القديم كما هو بصرامة
             }
         }
 
@@ -305,36 +324,51 @@ async function main() {
             let isImgbb = bannerUrl.includes('ibb.co');
             let isKitsu = bannerUrl.includes('kitsu');
             let needsUpdate = false;
+            let logReason = '';
 
             if (isImgbb) {
                 needsUpdate = false;
             } else if (isKitsu) {
-                let isValid = await checkImageStrict(bannerUrl);
-                if (!isValid) needsUpdate = true;
+                let check = await checkImageStrict(bannerUrl);
+                if (!check.valid) {
+                    needsUpdate = true;
+                    logReason = `بانر Kitsu معطل (Status: ${check.status})`;
+                }
             } else {
                 needsUpdate = true;
+                logReason = `البانر ليس من Kitsu ولا ImgBB`;
             }
 
             if (needsUpdate && kitsuId) {
                 let targetKitsuBanner = `https://media.kitsu.app/anime/cover_images/${kitsuId}/large.jpg`;
-                let isTargetValid = await checkImageStrict(targetKitsuBanner);
+                console.log(`🔄 [جاري التحديث] ${animeName} | البانر: ${logReason} -> محاولة فحص بانر Kitsu البديل...`);
                 
-                if (isTargetValid) {
+                let targetCheck = await checkImageStrict(targetKitsuBanner);
+                
+                if (targetCheck.valid) {
                     anime.bannerImage = targetKitsuBanner;
                     isUpdated = true;
+                    console.log(`✅ [نجاح البانر] ${animeName}: تم التحديث إلى Kitsu بنجاح.`);
+                } else {
+                    failedUpdates++;
+                    console.log(`❌ [فشل البانر] ${animeName}: البانر البديل لا يعمل (Status: ${targetCheck.status}). الإبقاء على البانر القديم.`);
                 }
+                await delay(150);
             }
         }
 
         if (isUpdated) initialUpdates++;
-        if (i > 0 && i % 1000 === 0) console.log(`⏳ تم مراجعة ${i} أنمي ضمن الفحص الصارم...`);
     }
 
+    console.log(`\n📊 [إحصائيات الفحص الأولي]`);
+    console.log(`- الأنميات التي تم تحويلها بنجاح: ${initialUpdates}`);
+    console.log(`- الأنميات التي تم الإبقاء على روابطها القديمة (لأن Kitsu لا يمتلك صور لها أو محظور): ${failedUpdates}`);
+
     if (initialUpdates > 0) {
-        console.log(`✅ تم تصحيح ${initialUpdates} أنمي وتأمينها بروابط Kitsu صالحة. جاري حفظ البيانات المبدئية...`);
+        console.log(`جاري حفظ البيانات المبدئية...`);
         saveJSON(ALL_ANIME_FILE, allAnime);
     } else {
-        console.log('✅ الفحص الأولي مكتمل: جميع الروابط محمية وصالحة، ولا حاجة لأي تعديلات مبدئية.');
+        console.log('الفحص الأولي مكتمل: جميع الروابط الحالية صالحة أو لا تملك بديلاً في Kitsu.');
     }
 
     const IS_INCOMPLETE = allAnime.length < 10000; 
@@ -517,6 +551,10 @@ async function main() {
     for (let i = 0; i < allAnime.length; i++) {
         let anime = allAnime[i];
         
+        // 🌟 التعديل الثاني: التحقق مما إذا كان الأنمي هينتاي، وإذا لم يكن كذلك نتخطاه
+        const isHentai = anime.genres && anime.genres.some(g => g.toLowerCase() === 'hentai');
+        if (!isHentai) continue;
+
         let isUpdated = false;
 
         let freshDB = loadJSON(ALL_ANIME_FILE);
