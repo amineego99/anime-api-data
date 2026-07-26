@@ -10,10 +10,9 @@ console.log = (...args) => {
 
 const ANILIST_API_URL = 'https://graphql.anilist.co';
 const AOD_URL = 'https://github.com/manami-project/anime-offline-database/releases/latest/download/anime-offline-database-minified.json';
-
-// 🌟 تمت إعادة الرابط الأصلي الصحيح والموثوق
 const TMDB_MAPPING_URL = 'https://raw.githubusercontent.com/Fribb/anime-lists/master/anime-list-full.json';
 
+// مفتاح TMDB الخاص بك 
 const TMDB_API_KEY = '21e3a681c29b77f96c3456d5cbd6ef17'; 
 const IMGBB_API_KEY = 'b319ae56c851eecbb26149310233535b';
 
@@ -155,6 +154,7 @@ async function buildTmdbMapper() {
         
         data.forEach(item => {
             if (item.anilist_id && item.themoviedb_id) {
+                // نعتمد تصنيف Fribb كبداية
                 mapper[item.anilist_id] = { tmdb_id: item.themoviedb_id, tmdb_type: item.type === 'Movie' ? 'movie' : 'tv' };
             }
         });
@@ -187,7 +187,7 @@ async function formatAnimeData(anime, aodMap, tmdbMap, existingAnime) {
         finalMediumImage = existingAnime.coverImage?.medium || finalMediumImage;
         finalBannerImage = existingAnime.bannerImage || finalBannerImage;
 
-        // 🛡️ حماية صور ImgBB وصور TMDB التي تم جلبها مسبقاً 
+        // 🛡️ حماية صور ImgBB وصور TMDB التي تم جلبها مسبقاً
         if (finalLargeImage.includes('ibb.co') || finalLargeImage.includes('image.tmdb.org')) {
             isProtected = true;
         }
@@ -288,11 +288,10 @@ async function main() {
     }
 
     // ══════════════════════════════════════════════════════════════
-    // 🌟 ثانياً: المكنسة الشاملة (ترقية لـ TMDB وإصلاح صور Kitsu المكسورة)
+    // 🌟 ثانياً: المكنسة الذكية (محاولة الترقية لـ TMDB بذكاء بدون المساس بـ Kitsu السليمة)
     // ══════════════════════════════════════════════════════════════
-    console.log('🔍 ثانياً: المكنسة الشاملة لترقية الصور وترميم الروابط المكسورة...');
+    console.log('🔍 ثانياً: المكنسة الشاملة لترقية الصور...');
     let tmdbFixCount = 0;
-    let fallbackFixCount = 0;
     
     for (let i = 0; i < allAnime.length; i++) {
         let anime = allAnime[i];
@@ -305,15 +304,23 @@ async function main() {
 
         let fixedWithTmdb = false;
         
-        // استخراج TMDB ID من الخريطة الحية مباشرة
+        // استخراج البيانات من الخريطة
         let currentTmdbInfo = tmdbMap[anime.id];
         let activeTmdbId = anime.tmdb_id || (currentTmdbInfo ? currentTmdbInfo.tmdb_id : null);
-        let activeTmdbType = anime.tmdb_type || (currentTmdbInfo ? currentTmdbInfo.tmdb_type : null);
+        let activeTmdbType = anime.tmdb_type || (currentTmdbInfo ? currentTmdbInfo.tmdb_type : 'tv'); // الافتراضي مسلسل
         
-        // 1. محاولة ترقية الصورة إلى TMDB
         if (activeTmdbId && TMDB_API_KEY !== 'YOUR_TMDB_API_KEY_HERE') {
             try {
-                const tmdbRes = await fetch(`https://api.themoviedb.org/3/${activeTmdbType}/${activeTmdbId}?api_key=${TMDB_API_KEY}&append_to_response=images&include_image_language=en,null`);
+                // المحاولة الأولى
+                let tmdbRes = await fetch(`https://api.themoviedb.org/3/${activeTmdbType}/${activeTmdbId}?api_key=${TMDB_API_KEY}&append_to_response=images&include_image_language=en,null`);
+                
+                // 🌟 نظام المحاولة المزدوجة الذكي: إذا فشل كمسلسل، جربه كفيلم والعكس!
+                if (tmdbRes.status === 404) {
+                    const alternateType = activeTmdbType === 'tv' ? 'movie' : 'tv';
+                    tmdbRes = await fetch(`https://api.themoviedb.org/3/${alternateType}/${activeTmdbId}?api_key=${TMDB_API_KEY}&append_to_response=images&include_image_language=en,null`);
+                    if (tmdbRes.ok) activeTmdbType = alternateType; // تصحيح النوع في القاعدة
+                }
+
                 if (tmdbRes.ok) {
                     const tmdbData = await tmdbRes.json();
                     
@@ -329,44 +336,31 @@ async function main() {
                     
                     anime.tmdb_id = activeTmdbId;
                     anime.tmdb_type = activeTmdbType;
+                } else {
+                    console.log(`❌ رفض TMDB الطلب لأنمي ${anime.title.romaji || anime.id} بكود خطأ: ${tmdbRes.status}`);
                 }
-            } catch (e) {}
-            await delay(250); // الحفاظ على استقرار الـ API
+            } catch (e) {
+                console.log(`❌ فشل الاتصال بسيرفر TMDB لأنمي ${anime.id}`);
+            }
+            await delay(300); // ⏱️ تأخير آمن يحترم حماية TMDB
         }
         
         if (fixedWithTmdb) {
             tmdbFixCount++;
             console.log(`🎬 تم ترقية صور ${anime.title.romaji || anime.id} لـ TMDB`);
         } 
-        // 2. 🩹 الطوارئ: إذا فشل TMDB وكانت الصورة مكسورة (kitsu.app)، نستدعي MAL لترميمها
-        else if (anime.coverImage && anime.coverImage.large && anime.coverImage.large.includes('kitsu.app')) {
-            if (anime.mal_id) {
-                try {
-                    const jikanRes = await fetch(`https://api.jikan.moe/v4/anime/${anime.mal_id}`);
-                    if (jikanRes.ok) {
-                        const jikanData = await jikanRes.json();
-                        const malImage = jikanData.data?.images?.jpg?.large_image_url;
-                        if (malImage) {
-                            anime.coverImage.large = malImage;
-                            anime.coverImage.medium = malImage;
-                            fallbackFixCount++;
-                            console.log(`🩹 تم ترميم صورة ${anime.title.romaji || anime.id} المكسورة بـ MAL`);
-                        }
-                    }
-                } catch (e) {}
-                await delay(1100); // ⏱️ تأخير لتجنب حظر سيرفر Jikan
-            }
-        }
+        
+        // 🌟 الحماية المطلقة: لا يوجد أوامر لاستبدال صور Kitsu السليمة هنا!
 
         delete anime._isProtected;
         delete anime._isBannerProtected;
     }
 
-    if (tmdbFixCount > 0 || fallbackFixCount > 0) {
-        console.log(`✅ تمت ترقية ${tmdbFixCount} أنمي لـ TMDB، وترميم ${fallbackFixCount} صورة مكسورة.`);
+    if (tmdbFixCount > 0) {
+        console.log(`✅ تمت ترقية ${tmdbFixCount} أنمي لـ TMDB بنجاح.`);
         saveJSON(ALL_ANIME_FILE, allAnime); 
     } else {
-        console.log('✅ جميع الصور في قاعدة البيانات مُحدثة وتعمل بشكل سليم.');
+        console.log('✅ اكتمل الفحص دون العثور على صور جديدة قابلة للترقية.');
     }
 
     // ══════════════════════════════════════════════════════════════
