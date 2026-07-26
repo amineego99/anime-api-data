@@ -13,8 +13,8 @@ const AOD_URL = 'https://github.com/manami-project/anime-offline-database/releas
 const TMDB_MAPPING_URL = 'https://raw.githubusercontent.com/Fribb/anime-lists/master/anime-list-full.json';
 
 // ضع مفتاح TMDB API الخاص بك هنا
-const TMDB_API_KEY = 'YOUR_TMDB_API_KEY_HERE'; 
-const IMGBB_API_KEY = '21e3a681c29b77f96c3456d5cbd6ef17';
+const TMDB_API_KEY = '21e3a681c29b77f96c3456d5cbd6ef17'; 
+const IMGBB_API_KEY = 'b319ae56c851eecbb26149310233535b';
 
 const ENABLE_IMAGE_PROCESSING = false; 
 
