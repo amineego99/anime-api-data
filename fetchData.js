@@ -288,7 +288,7 @@ async function main() {
         if (page < CURRENT_TOTAL_PAGES && !stopFetching) await delay(1500);
     }
 
-    // ══════════════════════════════════════════════════════════════
+   // ══════════════════════════════════════════════════════════════
     // 🌟 ثانياً: المكنسة الهجومية (استبدال إجباري لصور MAL/AniList بـ TMDB أو Kitsu)
     // ══════════════════════════════════════════════════════════════
     console.log('🔍 ثانياً: ترقية جميع الصور غير المحمية إلى جودة TMDB السينمائية (أو Kitsu كبديل)...');
@@ -302,10 +302,15 @@ async function main() {
 
         let fixedWithTmdb = false;
         
-        // 1. محاولة ترقية الصورة إلى TMDB (إذا توفر الـ ID والمفتاح)
-        if (anime.tmdb_id && TMDB_API_KEY !== 'YOUR_TMDB_API_KEY_HERE') {
+        // 🌟 السر هنا: نجلب الـ ID من الخريطة مباشرة لأن الأنميات القديمة لا تمتلكه في القاعدة بعد!
+        let currentTmdbInfo = tmdbMap[anime.id];
+        let activeTmdbId = anime.tmdb_id || (currentTmdbInfo ? currentTmdbInfo.tmdb_id : null);
+        let activeTmdbType = anime.tmdb_type || (currentTmdbInfo ? currentTmdbInfo.tmdb_type : null);
+        
+        // 1. محاولة ترقية الصورة إلى TMDB (باستخدام المعرف النشط)
+        if (activeTmdbId && TMDB_API_KEY !== 'YOUR_TMDB_API_KEY_HERE') {
             try {
-                const tmdbRes = await fetch(`https://api.themoviedb.org/3/${anime.tmdb_type}/${anime.tmdb_id}?api_key=${TMDB_API_KEY}&append_to_response=images&include_image_language=en,null`);
+                const tmdbRes = await fetch(`https://api.themoviedb.org/3/${activeTmdbType}/${activeTmdbId}?api_key=${TMDB_API_KEY}&append_to_response=images&include_image_language=en,null`);
                 if (tmdbRes.ok) {
                     const tmdbData = await tmdbRes.json();
                     
@@ -318,6 +323,10 @@ async function main() {
                     if (tmdbData.backdrop_path && !anime._isBannerProtected) {
                         anime.bannerImage = `https://image.tmdb.org/t/p/w1280${tmdbData.backdrop_path}`;
                     }
+                    
+                    // تحديث الأنمي في القاعدة ليحتفظ ببيانات TMDB للمستقبل
+                    anime.tmdb_id = activeTmdbId;
+                    anime.tmdb_type = activeTmdbType;
                 }
             } catch (e) {}
             await delay(250); // الحفاظ على استقرار الـ API
@@ -328,7 +337,7 @@ async function main() {
             fixCount++;
             console.log(`🎬 تم ترقية صور ${anime.title.romaji || anime.id} لـ TMDB`);
         } 
-        // 3. إذا فشل TMDB (أو لم يُعثر على الأنمي)، نجبره على العودة لـ Kitsu فوراً لإصلاح خطأ MAL القديم
+        // 3. إذا فشل TMDB (أو لم يُعثر على الأنمي)، نجبره على العودة لـ Kitsu فوراً
         else if (anime.kitsu_id && anime.coverImage && anime.coverImage.large && !anime.coverImage.large.includes('kitsu.app')) {
             anime.coverImage.large = `https://media.kitsu.app/anime/poster_images/${anime.kitsu_id}/large.jpg`;
             anime.coverImage.medium = `https://media.kitsu.app/anime/poster_images/${anime.kitsu_id}/medium.jpg`;
@@ -349,7 +358,6 @@ async function main() {
     } else {
         console.log('✅ جميع الصور في قاعدة البيانات مُحدثة وبأعلى جودة.');
     }
-
     // ══════════════════════════════════════════════════════════════
     
     console.log('⚡ ثالثاً: جاري بناء السجل التراكمي المباشر...');
