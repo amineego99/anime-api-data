@@ -6,7 +6,7 @@ const AOD_URL = 'https://github.com/manami-project/anime-offline-database/releas
 const IMGBB_API_KEY = '4d5e9c032af82adb668dc2882b100798';
 
 // 🌟 التعديل الأول: مفتاح للتحكم في فحص الصور (ضع true للتفعيل أو false للتعطيل)
-const ENABLE_IMAGE_VALIDATION = false; 
+const ENABLE_IMAGE_VALIDATION = true; 
 
 const DB_DIR = path.join(__dirname, 'api');
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
