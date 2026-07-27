@@ -200,7 +200,6 @@ async function uploadToImgBB(imageUrl) {
     }
 }
 
-// 🌟 تعديل صارم: دالة التنظيم لن تخمن الروابط بعد الآن، ولن تعبث بروابط Kitsu السليمة
 async function formatAnimeData(anime, aodMap, existingAnime) {
     const aodInfo = aodMap[anime.id] || {};
     let kitsuId = aodInfo.kitsu_id || (existingAnime ? existingAnime.kitsu_id : null);
@@ -213,7 +212,6 @@ async function formatAnimeData(anime, aodMap, existingAnime) {
     let finalMediumImage = defaultMalPicture;
     let finalBannerImage = anilistBanner;
 
-    // 🌟 حماية مطلقة للغلاف الموجود مسبقاً
     if (existingAnime && existingAnime.coverImage?.large) {
         let existingCover = existingAnime.coverImage.large;
         if (existingCover.includes('ibb.co') || existingCover.includes('kitsu.app') || existingCover.includes('kitsu.io')) {
@@ -222,7 +220,6 @@ async function formatAnimeData(anime, aodMap, existingAnime) {
         }
     }
 
-    // 🌟 حماية مطلقة للبانر الموجود مسبقاً
     if (existingAnime && existingAnime.bannerImage) {
         let existingBanner = existingAnime.bannerImage;
         if (existingBanner.includes('ibb.co') || existingBanner.includes('kitsu.app') || existingBanner.includes('kitsu.io')) {
@@ -305,6 +302,7 @@ async function main() {
         }
 
         if (needsKitsuFetch && kitsuId) {
+            console.log(`🔄 [جلب من Kitsu API] ${animeName} (ID: ${kitsuId})...`);
             let kitsuData = await fetchKitsuImages(kitsuId);
             
             if (kitsuData) {
@@ -314,8 +312,10 @@ async function main() {
                         anime.coverImage.large = kitsuData.cover;
                         anime.coverImage.medium = kitsuData.coverMedium || kitsuData.cover;
                         isUpdated = true;
+                        console.log(`  ✅ تم تحديث الغلاف للرابط الرسمي.`);
                     } else {
                         failedUpdates++;
+                        console.log(`  ❌ Kitsu لا يملك غلافاً لهذا الأنمي.`);
                     }
                 }
 
@@ -324,12 +324,15 @@ async function main() {
                     if (kitsuData.banner) {
                         anime.bannerImage = kitsuData.banner;
                         isUpdated = true;
+                        console.log(`  ✅ تم تحديث البانر للرابط الرسمي.`);
                     } else {
                         failedUpdates++;
+                        console.log(`  ❌ Kitsu لا يملك بانر (Cover) لهذا الأنمي.`);
                     }
                 }
             } else {
                 failedUpdates++;
+                console.log(`  ❌ [فشل الاتصال/تخطي] الأنمي غير موجود أو السيرفر تأخر بالرد.`);
             }
             await delay(600); 
         }
@@ -425,7 +428,6 @@ async function main() {
         let aodInfo = aodMap[anime.id];
         if (!anime.kitsu_id && aodInfo && aodInfo.kitsu_id) anime.kitsu_id = aodInfo.kitsu_id;
 
-        // 🌟 الحماية: يتجاهل Kitsu و Imgbb، ويفحص فقط الروابط الأخرى لمعرفة إن كانت معطوبة
         if (anime.coverImage && anime.coverImage.large) {
             let isProtected = anime.coverImage.large.includes('ibb.co') || anime.coverImage.large.includes('kitsu.app') || anime.coverImage.large.includes('kitsu.io');
             
