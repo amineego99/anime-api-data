@@ -1,0 +1,32 @@
+name: Update Anime Relations & Similar
+
+# هذا الأمر هو ما يجعل السكربت يعمل بضغطة زر يدوياً (بدون جدول زمني)
+on:
+  workflow_dispatch: 
+
+jobs:
+  update-relations:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # صلاحية ضرورية لكي يستطيع الأكشن حفظ ملف relations.json الجديد في المستودع
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # نستخدم نسخة حديثة من Node لدعم أوامر Fetch المدمجة
+
+      - name: Run Relations Script
+        # تأكد من أن اسم الملف هنا يطابق اسم السكربت الذي أنشأناه
+        run: node fetchRelations.js 
+
+      - name: Commit and Push Changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add api/relations.json
+          git commit -m "✨ Auto-update relations.json and similar anime" || echo "No changes to commit"
+          git push
