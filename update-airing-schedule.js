@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const DB_DIR = path.join(__dirname, 'api');
+const DB_DIR = path.join(__dirname, 'public', 'api');
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
 
 // 🌟 ملف جديد كلياً مخصص لصفحة Schedule فقط، ولن يمس schedule.json القديم
