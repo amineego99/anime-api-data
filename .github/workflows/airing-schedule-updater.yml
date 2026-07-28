@@ -1,0 +1,30 @@
+name: Update Airing Schedule Only
+
+on:
+  schedule:
+    - cron: '0 */12 * * *'
+  workflow_dispatch:
+
+jobs:
+  update-airing:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Run Airing Schedule Script
+        run: node update-airing-schedule.js
+
+      - name: Commit and Push Changes
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+          git add api/airing-schedule.json
+          git commit -m "تحديث ملف airing-schedule.json المخصص للجدول 📅" || echo "لا توجد تحديثات"
+          git push
